@@ -16,13 +16,15 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
-apply plugin: 'com.android.application'
-apply plugin: 'kotlin-android'
-apply from: "$flutterSdkPath/packages/flutter_tools/gradle/flutter.gradle"
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
 
 android {
     namespace "com.uncleren.poker"
-    compileSdk 34
+    compileSdk flutter.compileSdkVersion
     ndkVersion flutter.ndkVersion
 
     compileOptions {
@@ -36,8 +38,8 @@ android {
 
     defaultConfig {
         applicationId "com.uncleren.poker"
-        minSdkVersion 21
-        targetSdkVersion 34
+        minSdk flutter.minSdkVersion
+        targetSdk flutter.targetSdkVersion
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
     }
