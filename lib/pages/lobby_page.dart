@@ -16,9 +16,14 @@ class _LobbyPageState extends State<LobbyPage> {
   final _nameCtrl = TextEditingController();
   final _roomCtrl = TextEditingController();
   final _pwdCtrl = TextEditingController();
-  final _sbCtrl = TextEditingController(text: '1');
-  final _bbCtrl = TextEditingController(text: '2');
+  final _sbCtrl = TextEditingController(text: '10');
+  final _bbCtrl = TextEditingController(text: '20');
   final _buyInCtrl = TextEditingController(text: '1000');
+  final _minBuyInCtrl = TextEditingController(text: '1000');
+  final _maxBuyInCtrl = TextEditingController(text: '3999');
+  final _buyInUnitCtrl = TextEditingController(text: '1000');
+  final _anteCtrl = TextEditingController(text: '0');
+  bool _hasAnte = false;
   bool _navigated = false;
 
   @override
@@ -44,12 +49,27 @@ class _LobbyPageState extends State<LobbyPage> {
     }
   }
 
+  int _i(TextEditingController c, int dflt) =>
+      int.tryParse(c.text.trim()) ?? dflt;
+
   void _create() {
-    final buyIn = int.tryParse(_buyInCtrl.text) ?? 1000;
-    final sb = int.tryParse(_sbCtrl.text) ?? 1;
-    final bb = int.tryParse(_bbCtrl.text) ?? sb * 2;
-    _c.createRoom(_nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim(),
-        buyIn, sb, bb);
+    final buyIn = _i(_buyInCtrl, 1000);
+    final sb = _i(_sbCtrl, 10);
+    final bb = _i(_bbCtrl, sb * 2);
+    final ante = _hasAnte ? _i(_anteCtrl, 0) : 0;
+    final minBuyIn = _i(_minBuyInCtrl, 1000);
+    final maxBuyIn = _i(_maxBuyInCtrl, 3999);
+    final unit = _i(_buyInUnitCtrl, 1000).clamp(1, 999999);
+    _c.createRoom(
+      name: _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim(),
+      buyIn: buyIn,
+      sb: sb,
+      bb: bb,
+      ante: ante,
+      minBuyIn: minBuyIn,
+      maxBuyIn: maxBuyIn,
+      buyInUnit: unit,
+    );
   }
 
   void _join() {
@@ -59,9 +79,9 @@ class _LobbyPageState extends State<LobbyPage> {
           .showSnackBar(const SnackBar(content: Text('请输入房间号')));
       return;
     }
-    final buyIn = int.tryParse(_buyInCtrl.text) ?? 1000;
-    _c.joinRoom(id, _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim(),
-        buyIn,
+    final buyIn = _i(_buyInCtrl, 1000);
+    _c.joinRoom(id,
+        _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim(), buyIn,
         password: _pwdCtrl.text.trim());
   }
 
@@ -69,6 +89,17 @@ class _LobbyPageState extends State<LobbyPage> {
   void dispose() {
     _c.removeListener(_onChange);
     super.dispose();
+  }
+
+  Widget _numField(String label, TextEditingController ctrl, {bool enabled = true}) {
+    return Expanded(
+      child: TextField(
+        controller: ctrl,
+        enabled: enabled,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(labelText: label),
+      ),
+    );
   }
 
   @override
@@ -92,25 +123,35 @@ class _LobbyPageState extends State<LobbyPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text('创建房间',
+                      const Text('创建房间（牌桌参数）',
                           style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
                       Row(children: [
-                        Expanded(
-                            child: TextField(
-                                controller: _sbCtrl,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(labelText: '小盲'))),
+                        _numField('小盲', _sbCtrl),
                         const SizedBox(width: 8),
-                        Expanded(
-                            child: TextField(
-                                controller: _bbCtrl,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(labelText: '大盲'))),
+                        _numField('大盲', _bbCtrl),
                       ]),
-                      TextField(
-                          controller: _buyInCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(labelText: '买入筹码')),
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        _numField('买入下限', _minBuyInCtrl),
+                        const SizedBox(width: 8),
+                        _numField('买入上限', _maxBuyInCtrl),
+                      ]),
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        _numField('买入最小单位', _buyInUnitCtrl),
+                        const SizedBox(width: 8),
+                        _numField('初始买入', _buyInCtrl),
+                      ]),
+                      const SizedBox(height: 8),
+                      SwitchListTile(
+                        title: const Text('是否有前注 (ante)'),
+                        value: _hasAnte,
+                        onChanged: (v) => setState(() => _hasAnte = v),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      if (_hasAnte)
+                        _numField('前注金额', _anteCtrl),
                       const SizedBox(height: 8),
                       ElevatedButton(
                           onPressed: _c.connected ? _create : null,
