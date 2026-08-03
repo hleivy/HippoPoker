@@ -8,18 +8,20 @@
 //       handHistory) / roomList / error / notice / dailyReport / left
 //
 // 客户端本地负责：超时自动暂离计时器(含延时按钮)、手牌全过程本地日志持久化。
+//
+// 跨平台：WebSocketChannel.connect 同时支持 Web 与 Android；手牌本地日志通过
+// storage/hand_history_storage.dart 的条件导入分流（Web=localStorage，其他=文件）。
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'config.dart';
+import 'storage/hand_history_storage.dart';
 
 class GameController extends ChangeNotifier {
-  IOWebSocketChannel? _channel;
+  WebSocketChannel? _channel;
+  final HandHistoryStorage _store = HandHistoryStorage();
   final List<Map<String, dynamic>> _queue = [];
 
   bool connected = false;
@@ -50,7 +52,7 @@ class GameController extends ChangeNotifier {
     if (_channel != null || connecting) return;
     connecting = true;
     notifyListeners();
-    _channel = IOWebSocketChannel.connect(Uri.parse(SERVER_URL));
+    _channel = WebSocketChannel.connect(Uri.parse(SERVER_URL));
     _channel!.stream.listen(
       _onMessage,
       onDone: () {
@@ -327,17 +329,11 @@ class GameController extends ChangeNotifier {
     secondsLeft = 0;
   }
 
-  // ---- 手牌全过程本地日志持久化（功能 2）----
-  Future<String> get _historyPath async {
-    final dir = await getApplicationDocumentsDirectory();
-    return '${dir.path}/hand_history.log';
-  }
-
+  // ---- 手牌全过程本地日志持久化（功能 2，跨平台）----
   Future<void> _appendHistory(String line) async {
     try {
-      final f = File(await _historyPath);
       final ts = _now();
-      await f.writeAsString('[$ts] $line\n', mode: FileMode.append);
+      await _store.append('[$ts] $line');
     } catch (_) {
       // 忽略本地写入失败
     }
@@ -346,10 +342,7 @@ class GameController extends ChangeNotifier {
   /// 读取本地手牌日志（供历史查看页使用）
   Future<List<String>> readHistory() async {
     try {
-      final f = File(await _historyPath);
-      if (!await f.exists()) return [];
-      final content = await f.readAsString();
-      return content.split('\n').where((e) => e.trim().isNotEmpty).toList();
+      return await _store.readAll();
     } catch (_) {
       return [];
     }
