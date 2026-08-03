@@ -346,7 +346,7 @@ class _TablePageState extends State<TablePage> {
                                   .map((c) => PokerCardView(
                                       card: PokerCard.fromJson(c as Map<String, dynamic>)))
                                   .toList())
-                              .cast<Widget>()),
+                              .cast<Widget>(),
                           if ((me['cards'] as List? ?? []).isEmpty)
                             const Text('（未发牌）', style: TextStyle(color: Colors.white54)),
                         ],
