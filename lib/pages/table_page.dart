@@ -238,13 +238,59 @@ class _TablePageState extends State<TablePage> {
     );
   }
 
-  // 应发牌者昵称（用于提示“等待 X 发牌”）
-  String _starterName(List<Map<String, dynamic>> players, String starterId) {
-    if (starterId.isEmpty) return '庄家';
-    for (final p in players) {
-      if (p['id'] == starterId) return (p['name']?.toString() ?? '玩家');
+  // 自动发牌状态条：倒计时 / 已暂停 / 正在游戏中
+  Widget _buildStatusBar(Map<String, dynamic> state, Map<String, dynamic>? me,
+      List<Map<String, dynamic>> players, bool inProgress) {
+    if (inProgress) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(width: 8, height: 8, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber)),
+          const SizedBox(width: 8),
+          Text('第 ${state['handNumber'] ?? 0} 手进行中 · ${_stageLabels[state['stage']] ?? state['stage']}',
+              style: const TextStyle(color: Colors.white70, fontSize: 14)),
+        ],
+      );
     }
-    return '庄家';
+    final stage = state['stage'] as String? ?? '';
+    if (stage == 'ended' || stage == 'showdown' || stage == 'waiting') {
+      if (_c.someonePaused) {
+        final names = _c.pausedIds
+            .map((id) => players.firstWhere((p) => p['id'] == id, orElse: () => {})['name']?.toString() ?? '玩家')
+            .where((n) => n.isNotEmpty)
+            .join('、');
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.pause, color: Colors.amber, size: 18),
+            const SizedBox(width: 6),
+            Text('已暂停：$names 请求本手后暂停',
+                style: const TextStyle(color: Colors.amber, fontSize: 14, fontWeight: FontWeight.bold)),
+          ],
+        );
+      }
+      final t = _c.timeToNextHand;
+      if (t > 0) {
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.timer, color: Colors.amber, size: 18),
+            const SizedBox(width: 6),
+            Text('本手结束 · ${t} 秒后自动发下一手牌',
+                style: const TextStyle(color: Colors.white70, fontSize: 14)),
+          ],
+        );
+      }
+      return const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.hourglass_empty, color: Colors.white54, size: 18),
+          SizedBox(width: 6),
+          Text('等待开始下一手…', style: TextStyle(color: Colors.white54, fontSize: 14)),
+        ],
+      );
+    }
+    return const SizedBox.shrink();
   }
 
   // 根据相对庄家的座位序号计算位置标签（BTN/SB/BB/UTG/MP/CO）
@@ -267,6 +313,13 @@ class _TablePageState extends State<TablePage> {
       appBar: AppBar(
         title: Text(roomName),
         actions: [
+          // 暂停 / 继续：仅在本手未结束时显示；暂停后下一手不会自动开始
+          if (_c.state?['handInProgress'] != true)
+            TextButton(
+              onPressed: _c.isPaused ? _c.resumeAfterHand : _c.pauseAfterHand,
+              child: Text(_c.isPaused ? '继续发牌' : '本手后暂停',
+                  style: TextStyle(color: _c.isPaused ? Colors.amber : Colors.white)),
+            ),
           TextButton(
             onPressed: () => setState(() {
               _autoCall = !_autoCall;
@@ -411,12 +464,35 @@ class _TablePageState extends State<TablePage> {
                     ? (((seat - dealerSeat) % n) + n) % n
                     : -1;
                 final pos = relPos >= 0 ? _posLabel(relPos, n) : '';
+                final isDealer = p['id'] == _c.dealerId;
+                final bet = (p['bet'] as int?) ?? 0;
+                // 下注筹码放在座位内侧（更靠近底池）
+                if (bet > 0) {
+                  final innerX = cx + (rx * 0.55) * cos(angle);
+                  final innerY = cy + (ry * 0.55) * sin(angle);
+                  seats.add(Positioned(
+                    left: innerX,
+                    top: innerY,
+                    child: Transform.translate(
+                      offset: const Offset(-24, -12),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.amber.shade200, width: 1),
+                        ),
+                        child: Text('$bet', style: const TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ));
+                }
                 seats.add(Positioned(
                   left: x,
                   top: y,
                   child: Transform.translate(
                     offset: const Offset(-78, -52),
-                    child: _buildSeat(p, p['id'] == _c.playerId, pos),
+                    child: _buildSeat(p, p['id'] == _c.playerId, pos, isDealer),
                   ),
                 ));
               }
@@ -426,44 +502,12 @@ class _TablePageState extends State<TablePage> {
 
           return Column(
             children: [
-              // 状态条
+              // 状态条：自动发牌提示 / 暂停提示 / 倒计时
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 color: Colors.black38,
-                child: Column(
-                  children: [
-                    if (_c.canStartHand)
-                      Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        child: ElevatedButton.icon(
-                          onPressed: _c.startHand,
-                          icon: const Icon(Icons.play_arrow, size: 22),
-                          label: Text(
-                            (me != null && me['isDealer'] == true)
-                                ? '我是庄家 · 发下一手牌'
-                                : '轮到我发牌（庄家是 AI）',
-                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.amber,
-                            foregroundColor: Colors.black,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            minimumSize: const Size.fromHeight(52),
-                          ),
-                        ),
-                      )
-                    else if (!inProgress)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          '等待 ${_starterName(players, _c.starterId)} 发下一手牌…',
-                          style: const TextStyle(color: Colors.white70, fontSize: 14),
-                        ),
-                      ),
-                  ],
-                ),
+                child: _buildStatusBar(state, me, players, inProgress),
               ),
               // 思考超时警告（功能 4）
               if (_c.timeoutWarning)
@@ -502,33 +546,47 @@ class _TablePageState extends State<TablePage> {
                   child: Text(lastResult['note']?.toString() ?? '',
                       textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
                 ),
-              // 我的管理操作（非行动时可见）
-              if (me != null && !myTurn)
+              // 我的管理操作：离桌/回桌、补充赎回（始终可见，参考 GG 底部信息条）
+              if (me != null)
                 Container(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
                   color: Colors.black45,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (me['tempLeft'] == true)
-                        ElevatedButton(
-                          onPressed: _c.returnTable,
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-                          child: const Text('返回牌桌'),
-                        )
-                      else ...[
-                        ElevatedButton(
-                          onPressed: _c.tempLeave,
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
-                          child: const Text('暂时离桌'),
+                  child: SafeArea(
+                    top: false,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        // 左侧：补充/赎回
+                        ElevatedButton.icon(
+                          onPressed: (!inProgress || me['tempLeft'] == true) ? _showBuyCashout : null,
+                          icon: const Icon(Icons.account_balance_wallet, size: 16),
+                          label: const Text('补充 / 赎回'),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
                         ),
-                        const SizedBox(width: 8),
-                        ElevatedButton(
-                          onPressed: (!inProgress) ? _showBuyCashout : null,
-                          child: const Text('补充/赎回'),
-                        ),
-                      ]
-                    ],
+                        // 右侧：离桌 / 回桌（更显眼）
+                        if (me['tempLeft'] == true)
+                          ElevatedButton.icon(
+                            onPressed: _c.returnTable,
+                            icon: const Icon(Icons.login, size: 18),
+                            label: const Text('回到牌桌'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                            ),
+                          )
+                        else
+                          ElevatedButton.icon(
+                            onPressed: _c.tempLeave,
+                            icon: const Icon(Icons.logout, size: 18),
+                            label: const Text('暂时离桌'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.grey.shade700,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               // 动作条
@@ -592,14 +650,14 @@ class _TablePageState extends State<TablePage> {
   }
 
   // 单个座位卡片（围绕牌桌显示）
-  Widget _buildSeat(Map<String, dynamic> p, bool isSelf, String pos) {
+  Widget _buildSeat(Map<String, dynamic> p, bool isSelf, String pos, bool isDealer) {
     final name = (p['name']?.toString() ?? '玩家');
     final chips = (p['chips'] as int?) ?? 0;
-    final bet = (p['bet'] as int?) ?? 0;
     final folded = p['folded'] == true;
     final allIn = p['allIn'] == true;
     final isTurn = p['isTurn'] == true;
-    final isDealer = p['isDealer'] == true;
+    final tempLeft = p['tempLeft'] == true;
+    final sittingOut = p['sittingOut'] == true;
     final cards = (p['cards'] as List? ?? [])
         .map((c) => PokerCard.fromJson(c as Map<String, dynamic>))
         .toList();
@@ -619,7 +677,9 @@ class _TablePageState extends State<TablePage> {
       width: 156,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
-        color: isTurn ? Colors.green.shade800 : Colors.black54,
+        color: tempLeft || sittingOut
+            ? Colors.black38
+            : (isTurn ? Colors.green.shade800 : Colors.black54),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isTurn ? Colors.amber : (isDealer ? Colors.amber.shade200 : Colors.green.shade900),
@@ -627,15 +687,25 @@ class _TablePageState extends State<TablePage> {
         ),
       ),
       child: Opacity(
-        opacity: folded ? 0.45 : 1,
+        opacity: folded ? 0.45 : (tempLeft || sittingOut ? 0.55 : 1),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                if (isDealer)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Text('D', style: TextStyle(fontSize: 11, color: Colors.black, fontWeight: FontWeight.bold)),
+                  ),
                 if (pos.isNotEmpty)
                   Container(
+                    margin: const EdgeInsets.only(left: 4),
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: pos == 'BTN' ? Colors.amber : Colors.blueGrey,
@@ -656,10 +726,10 @@ class _TablePageState extends State<TablePage> {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
             Text('筹码 $chips', style: const TextStyle(fontSize: 13, color: Colors.white70)),
-            if (bet > 0)
-              Text('下注 $bet', style: const TextStyle(fontSize: 13, color: Colors.orange)),
             const SizedBox(height: 4),
             cardRow,
+            if (tempLeft || sittingOut)
+              const Text('暂时离桌', style: TextStyle(fontSize: 12, color: Colors.white54)),
             if (allIn)
               const Text('ALL IN', style: TextStyle(fontSize: 13, color: Colors.red, fontWeight: FontWeight.bold)),
             if (folded)

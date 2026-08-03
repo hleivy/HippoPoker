@@ -230,6 +230,9 @@ class GameController extends ChangeNotifier {
     _send({'type': 'action', 'action': action, 'amount': amount});
   }
 
+  void pauseAfterHand() => _send({'type': 'pauseAfterHand', 'paused': true});
+  void resumeAfterHand() => _send({'type': 'pauseAfterHand', 'paused': false});
+
   void clearError() {
     errorMsg = null;
     notifyListeners();
@@ -277,15 +280,29 @@ class GameController extends ChangeNotifier {
   // 当前应发牌者（庄家，或其下家链第一个人类），由服务端计算下发
   String get starterId => (state?['starterId'] as String?) ?? '';
 
-  // 仅"应发牌者"可开始一手牌（首手为房主，后续为庄家/其下家人类）
-  bool get canStartHand {
-    if (state == null) return false;
-    if (state!['handInProgress'] == true) return false;
-    final m = me;
-    if (m == null) return false;
-    final starter = state!['starterId'];
-    return starter != null && starter == playerId;
+  // 庄家 id
+  String get dealerId => (state?['dealerId'] as String?) ?? '';
+
+  // 已请求“本手结束后暂停”的玩家 id 列表
+  List<String> get pausedIds {
+    final list = state?['pausedIds'];
+    if (list is List) {
+      return list.map((e) => e.toString()).toList();
+    }
+    return [];
   }
+
+  // 距离自动开始下一手的秒数（0 表示未在倒计时）
+  int get timeToNextHand => (state?['timeToNextHand'] as int?) ?? 0;
+
+  // 当前是否“本手结束后暂停”（自动发牌已取消手动发牌按钮，保留 getter 兼容旧代码）
+  bool get isPaused => pausedIds.contains(playerId);
+
+  // 是否有人请求暂停
+  bool get someonePaused => pausedIds.isNotEmpty;
+
+  // 自动发牌时代不再需要手动按钮；保留兼容旧代码
+  bool get canStartHand => false;
 
   List<dynamic> get handHistory => (state?['handHistory'] as List?) ?? [];
 
