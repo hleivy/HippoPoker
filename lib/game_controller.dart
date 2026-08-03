@@ -26,6 +26,8 @@ class GameController extends ChangeNotifier {
 
   bool connected = false;
   bool connecting = false;
+  bool _reconnecting = false;
+  int _reconnectAttempts = 0;
   String? errorMsg;
   String? playerId;
   String? roomId;
@@ -47,42 +49,54 @@ class GameController extends ChangeNotifier {
   int _lastHandNumber = 0;
   String? _lastResultNote;
 
+  // 是否处于“正在连接/重连中”——用于 UI 显示“连接中”而非报错
+  bool get isConnecting => connecting || _reconnecting;
+
   // ---- 连接 ----
   void connect() {
-    if (_channel != null || connecting) return;
+    if (_channel != null || connecting || _disposed) return;
     connecting = true;
+    _reconnecting = false;
     notifyListeners();
-    _channel = WebSocketChannel.connect(Uri.parse(SERVER_URL));
+    try {
+      _channel = WebSocketChannel.connect(Uri.parse(SERVER_URL));
+    } catch (e) {
+      _onDrop();
+      return;
+    }
     _channel!.stream.listen(
       _onMessage,
-      onDone: () {
-        connected = false;
-        connecting = false;
-        _cancelTimers();
-        notifyListeners();
-        _scheduleReconnect();
-      },
-      onError: (e) {
-        connected = false;
-        connecting = false;
-        errorMsg = '无法连接到服务器，请检查网络（将自动重试）';
-        _cancelTimers();
-        notifyListeners();
-        _scheduleReconnect();
-      },
+      onDone: () => _onDrop(),
+      onError: (_) => _onDrop(),
     );
     _channel!.ready.then((_) {
       connected = true;
       connecting = false;
+      _reconnecting = false;
+      _reconnectAttempts = 0;
+      errorMsg = null;
       for (final m in _queue) _channel!.sink.add(jsonEncode(m));
       _queue.clear();
       notifyListeners();
-    }).catchError((e) {
-      connecting = false;
-      errorMsg = '连接失败，正在尝试重新连接…';
-      notifyListeners();
-      _scheduleReconnect();
-    });
+    }).catchError((_) => _onDrop());
+  }
+
+  // 连接断开/失败时统一处理：重连更快(1.5s)，首次失败不报警，连续失败才提示
+  void _onDrop() {
+    if (_disposed) return;
+    connected = false;
+    connecting = false;
+    _channel = null;
+    _cancelTimers();
+    _reconnectAttempts++;
+    if (_reconnectAttempts >= 2) {
+      errorMsg = '网络连接异常，正在自动重试…';
+    } else {
+      errorMsg = null; // 首次失败不打扰，直接重试
+    }
+    _reconnecting = true;
+    notifyListeners();
+    _scheduleReconnect();
   }
 
   void _send(Map<String, dynamic> msg) {
@@ -165,6 +179,7 @@ class GameController extends ChangeNotifier {
     int minBuyIn = 1000,
     int maxBuyIn = 3999,
     int buyInUnit = 1000,
+    int aiCount = 0,
   }) {
     _send({
       'type': 'createRoom',
@@ -176,6 +191,7 @@ class GameController extends ChangeNotifier {
       'minBuyIn': minBuyIn,
       'maxBuyIn': maxBuyIn,
       'buyInUnit': buyInUnit,
+      'aiCount': aiCount,
     });
   }
 
@@ -217,14 +233,12 @@ class GameController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 断线后自动重连（5 秒一次），修复手机端握手偶发失败导致的“按钮常灰”
+  /// 断线后自动重连（1.5 秒一次，比旧版 5 秒更快恢复）
   void _scheduleReconnect() {
     _retryTimer?.cancel();
     if (_disposed) return;
-    _retryTimer = Timer(const Duration(seconds: 5), () {
+    _retryTimer = Timer(const Duration(milliseconds: 1500), () {
       if (_disposed) return;
-      _channel = null;
-      connecting = false;
       connect();
     });
   }

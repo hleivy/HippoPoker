@@ -1,4 +1,5 @@
 // lib/pages/table_page.dart —— 牌桌：公共牌、玩家、底牌、下注动作 + 9 项功能 UI
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../game_controller.dart';
 import '../models/card_model.dart';
@@ -18,6 +19,8 @@ class _TablePageState extends State<TablePage> {
   late final GameController _c = widget.controller;
   int _raiseTarget = 0;
   bool _reportShown = false;
+  bool _autoCall = false; // 测试用：轮到我时自动过牌/跟注
+  Timer? _autoTimer;
 
   static const _stageLabels = {
     'preflop': '翻牌前',
@@ -29,12 +32,35 @@ class _TablePageState extends State<TablePage> {
   };
 
   void _leave() {
+    _cancelAutoTimer();
     _c.leaveRoom();
     _c.dispose();
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => LobbyPage(controller: GameController())),
       (_) => false,
     );
+  }
+
+  // 测试用：轮到我且未行动时，延迟一小段自动过牌/跟注，便于单人 vs AI 看完一手牌
+  void _scheduleAutoCall() {
+    if (!_autoCall || _autoTimer != null || !_c.myTurn) return;
+    _autoTimer = Timer(const Duration(milliseconds: 1200), () {
+      _autoTimer = null;
+      if (!mounted || !_autoCall || !_c.myTurn) return;
+      final callNeed = _c.callNeed;
+      _c.action(callNeed == 0 ? 'check' : 'call', amount: callNeed);
+    });
+  }
+
+  void _cancelAutoTimer() {
+    _autoTimer?.cancel();
+    _autoTimer = null;
+  }
+
+  @override
+  void dispose() {
+    _cancelAutoTimer();
+    super.dispose();
   }
 
   void _maybeShowReport() {
@@ -169,6 +195,14 @@ class _TablePageState extends State<TablePage> {
         title: Text('房间 ${_c.roomId ?? ''}'),
         actions: [
           TextButton(
+            onPressed: () => setState(() {
+              _autoCall = !_autoCall;
+              if (!_autoCall) _cancelAutoTimer();
+            }),
+            child: Text(_autoCall ? '自动跟注·开' : '自动跟注·关',
+                style: TextStyle(color: _autoCall ? Colors.amber : Colors.white)),
+          ),
+          TextButton(
             onPressed: () => Navigator.of(context)
                 .push(MaterialPageRoute(builder: (_) => HandHistoryPage(controller: _c))),
             child: const Text('历史', style: TextStyle(color: Colors.white)),
@@ -183,6 +217,8 @@ class _TablePageState extends State<TablePage> {
         animation: _c,
         builder: (ctx, _) {
           final state = _c.state;
+          // 测试用自动跟注调度（不依赖手动操作）
+          if (_autoCall && _c.myTurn) _scheduleAutoCall(); else _cancelAutoTimer();
           if (state == null) {
             return const Center(child: Text('等待房间状态…'));
           }
