@@ -110,6 +110,17 @@ class _LobbyPageState extends State<LobbyPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Center(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: Image.asset(
+                'assets/images/app_icon.png',
+                width: 96,
+                height: 96,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
           // 昵称输入框放在 AnimatedBuilder 之外，避免连接状态刷新打断中文输入法合成
           TextField(
             controller: _nameCtrl,
