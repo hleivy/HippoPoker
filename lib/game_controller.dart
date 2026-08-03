@@ -171,6 +171,7 @@ class GameController extends ChangeNotifier {
 
   // ---- 动作封装 ----
   void createRoom({
+    required String roomName,
     required String name,
     required int buyIn,
     required int sb,
@@ -183,6 +184,7 @@ class GameController extends ChangeNotifier {
   }) {
     _send({
       'type': 'createRoom',
+      'roomName': roomName,
       'name': name,
       'buyIn': buyIn,
       'smallBlind': sb,

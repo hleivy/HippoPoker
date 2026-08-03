@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../game_controller.dart';
 import '../config.dart';
+import '../storage/settings_storage.dart';
 import 'table_page.dart';
 
 class LobbyPage extends StatefulWidget {
@@ -16,6 +17,7 @@ class LobbyPage extends StatefulWidget {
 class _LobbyPageState extends State<LobbyPage> {
   late final GameController _c = widget.controller;
   final _nameCtrl = TextEditingController();
+  final _roomNameCtrl = TextEditingController(text: '财富西环线上扑克室');
   final _roomCtrl = TextEditingController();
   final _pwdCtrl = TextEditingController();
   final _sbCtrl = TextEditingController(text: '10');
@@ -30,11 +32,12 @@ class _LobbyPageState extends State<LobbyPage> {
   bool _creating = false; // 是否处于“创建房间”表单
   int _aiCount = 0; // AI 对手数量（单人测试用）
   Timer? _listTimer;
+  final SettingsStorage _settings = SettingsStorage();
 
   @override
   void initState() {
     super.initState();
-    _nameCtrl.text = '玩家${(1000 + (DateTime.now().millisecondsSinceEpoch % 9000)).toString()}';
+    _loadNickname();
     _c.connect();
     _c.listRooms();
     _c.addListener(_onChange);
@@ -42,6 +45,19 @@ class _LobbyPageState extends State<LobbyPage> {
     _listTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (!_navigated && mounted) _c.listRooms();
     });
+  }
+
+  // 记住上次使用的昵称（Web=localStorage，Android=文档文件），避免每次重填
+  Future<void> _loadNickname() async {
+    final n = await _settings.loadNickname();
+    if (mounted && n != null && n.isNotEmpty) {
+      _nameCtrl.text = n;
+    }
+  }
+
+  Future<void> _saveNickname() async {
+    final n = _nameCtrl.text.trim();
+    if (n.isNotEmpty) await _settings.saveNickname(n);
   }
 
   void _onChange() {
@@ -69,8 +85,14 @@ class _LobbyPageState extends State<LobbyPage> {
     final minBuyIn = _i(_minBuyInCtrl, 1000);
     final maxBuyIn = _i(_maxBuyInCtrl, 3999);
     final unit = _i(_buyInUnitCtrl, 1000).clamp(1, 999999);
+    final nick = _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim();
+    final roomName = _roomNameCtrl.text.trim().isEmpty
+        ? '财富西环线上扑克室'
+        : _roomNameCtrl.text.trim();
+    _saveNickname();
     _c.createRoom(
-      name: _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim(),
+      roomName: roomName,
+      name: nick,
       buyIn: buyIn,
       sb: sb,
       bb: bb,
@@ -90,14 +112,15 @@ class _LobbyPageState extends State<LobbyPage> {
       return;
     }
     final buyIn = _i(_buyInCtrl, 1000);
-    _c.joinRoom(id,
-        _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim(), buyIn,
-        password: _pwdCtrl.text.trim());
+    final nick = _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim();
+    _saveNickname();
+    _c.joinRoom(id, nick, buyIn, password: _pwdCtrl.text.trim());
   }
 
   @override
   void dispose() {
     _listTimer?.cancel();
+    _roomNameCtrl.dispose();
     _c.removeListener(_onChange);
     super.dispose();
   }
@@ -138,7 +161,14 @@ class _LobbyPageState extends State<LobbyPage> {
           ),
         ),
         const SizedBox(height: 12),
-        TextField(controller: _nameCtrl, decoration: const InputDecoration(labelText: '你的昵称')),
+        TextField(
+            controller: _roomNameCtrl,
+            decoration: const InputDecoration(labelText: '房间名称')),
+        const SizedBox(height: 12),
+        TextField(
+            controller: _nameCtrl,
+            decoration: const InputDecoration(
+                labelText: '你的昵称', hintText: '留空将记住上次使用的昵称')),
         const SizedBox(height: 12),
         Card(
           child: Padding(
@@ -234,7 +264,10 @@ class _LobbyPageState extends State<LobbyPage> {
           ),
         ),
         const SizedBox(height: 10),
-        TextField(controller: _nameCtrl, decoration: const InputDecoration(labelText: '你的昵称')),
+        TextField(
+            controller: _nameCtrl,
+            decoration: const InputDecoration(
+                labelText: '你的昵称', hintText: '留空将记住上次使用的昵称')),
         const SizedBox(height: 12),
         Row(
           children: [
