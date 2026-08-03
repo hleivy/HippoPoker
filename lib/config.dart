@@ -5,3 +5,6 @@
 //   - 等你 uncle.ren 备案完成后，可把地址改为 wss://poker.uncle.ren 即可无缝切换。
 const String SERVER_URL =
     'wss://express-b40d-290839-10-1462470907.sh.run.tcloudbase.com';
+
+/// 应用版本号（与 pubspec.yaml 保持一致，仅供界面展示）
+const String kAppVersion = '0.0.1';

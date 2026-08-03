@@ -39,6 +39,8 @@ class GameController extends ChangeNotifier {
   Map<String, dynamic>? dailyReport; // 最后一人离开时服务端下发的日报
 
   Timer? _tickTimer, _expireTimer, _warnTimer;
+  Timer? _retryTimer;
+  bool _disposed = false;
   DateTime? _deadline;
   int _lastHandNumber = 0;
   String? _lastResultNote;
@@ -56,13 +58,15 @@ class GameController extends ChangeNotifier {
         connecting = false;
         _cancelTimers();
         notifyListeners();
+        _scheduleReconnect();
       },
       onError: (e) {
         connected = false;
         connecting = false;
-        errorMsg = '连接错误：$e';
+        errorMsg = '无法连接到服务器，请检查网络（将自动重试）';
         _cancelTimers();
         notifyListeners();
+        _scheduleReconnect();
       },
     );
     _channel!.ready.then((_) {
@@ -73,8 +77,9 @@ class GameController extends ChangeNotifier {
       notifyListeners();
     }).catchError((e) {
       connecting = false;
-      errorMsg = '连接失败：$e';
+      errorMsg = '连接失败，正在尝试重新连接…';
       notifyListeners();
+      _scheduleReconnect();
     });
   }
 
@@ -208,6 +213,18 @@ class GameController extends ChangeNotifier {
   void clearError() {
     errorMsg = null;
     notifyListeners();
+  }
+
+  /// 断线后自动重连（5 秒一次），修复手机端握手偶发失败导致的“按钮常灰”
+  void _scheduleReconnect() {
+    _retryTimer?.cancel();
+    if (_disposed) return;
+    _retryTimer = Timer(const Duration(seconds: 5), () {
+      if (_disposed) return;
+      _channel = null;
+      connecting = false;
+      connect();
+    });
   }
 
   // ---- 当前视角便捷访问 ----
@@ -346,6 +363,8 @@ class GameController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _retryTimer?.cancel();
     _cancelTimers();
     _channel?.sink.close();
     super.dispose();
