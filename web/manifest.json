@@ -1,0 +1,10 @@
+{
+  "name": "河马扑克",
+  "short_name": "河马扑克",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0B1E2D",
+  "theme_color": "#0B1E2D",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false
+}
