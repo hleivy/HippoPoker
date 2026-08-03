@@ -1,5 +1,6 @@
-// lib/pages/table_page.dart —— 牌桌：公共牌、玩家、底牌、下注动作 + 9 项功能 UI
+// lib/pages/table_page.dart —— 牌桌：GG 风格图形化（椭圆牌桌 + 座位环绕 + 本人置底 + 位置标签）
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../game_controller.dart';
 import '../models/card_model.dart';
@@ -23,6 +24,7 @@ class _TablePageState extends State<TablePage> {
   Timer? _autoTimer;
 
   static const _stageLabels = {
+    'waiting': '等待开始',
     'preflop': '翻牌前',
     'flop': '翻牌',
     'turn': '转牌',
@@ -187,12 +189,25 @@ class _TablePageState extends State<TablePage> {
     );
   }
 
+  // 根据相对庄家的座位序号计算位置标签（BTN/SB/BB/UTG/MP/CO）
+  String _posLabel(int rel, int n) {
+    if (rel == 0) return 'BTN';
+    if (rel == 1) return 'SB';
+    if (rel == 2) return 'BB';
+    if (n >= 5 && rel == n - 1) return 'CO';
+    if (n == 4 && rel == 3) return 'UTG';
+    if (rel == 3) return 'UTG';
+    if (rel == n - 2) return 'MP';
+    return 'MP';
+  }
+
   @override
   Widget build(BuildContext context) {
     _maybeShowReport();
+    final roomName = _c.state?['roomName']?.toString() ?? '牌桌';
     return Scaffold(
       appBar: AppBar(
-        title: Text('房间 ${_c.roomId ?? ''}'),
+        title: Text(roomName),
         actions: [
           TextButton(
             onPressed: () => setState(() {
@@ -217,7 +232,6 @@ class _TablePageState extends State<TablePage> {
         animation: _c,
         builder: (ctx, _) {
           final state = _c.state;
-          // 测试用自动跟注调度（不依赖手动操作）
           if (_autoCall && _c.myTurn) _scheduleAutoCall(); else _cancelAutoTimer();
           if (state == null) {
             return const Center(child: Text('等待房间状态…'));
@@ -243,24 +257,114 @@ class _TablePageState extends State<TablePage> {
           final canRaise = maxTarget > minTarget;
           final target = _raiseTarget.clamp(minTarget, maxTarget);
           final lastResult = state['lastResult'] as Map<String, dynamic>?;
-          final isDealerFirst = (state['dealerSeat'] as int? ?? -1) < 0;
+          final dealerSeat = (state['dealerSeat'] as int? ?? -1);
+          final mySeat = me?['seat'] as int? ?? -1;
+          final n = players.length;
+          final isDealerFirst = dealerSeat < 0;
+
+          // 居中区：底池 + 公共牌
+          Widget centerArea = Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text('底池  $pot',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(5, (i) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: i < community.length
+                        ? PokerCardView(card: community[i])
+                        : PokerCardView(card: null, width: 40, height: 56),
+                  );
+                }),
+              ),
+              const SizedBox(height: 6),
+              Text(_stageLabels[stage] ?? stage,
+                  style: const TextStyle(color: Colors.white70)),
+            ],
+          );
+
+          // 牌桌图形区
+          Widget tableArea = LayoutBuilder(
+            builder: (lctx, cons) {
+              final w = cons.maxWidth;
+              final h = cons.maxHeight;
+              final cx = w / 2;
+              final cy = h / 2;
+              final rx = w * 0.40;
+              final ry = h * 0.37;
+              final seats = <Widget>[];
+              // 椭圆牌桌（绿绒）
+              seats.add(Positioned(
+                left: cx - rx,
+                top: cy - ry,
+                child: Container(
+                  width: rx * 2,
+                  height: ry * 2,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF0E5C3A),
+                    border: Border.all(color: Colors.green.shade700, width: 6),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black45, blurRadius: 12, spreadRadius: 2)
+                    ],
+                  ),
+                ),
+              ));
+              // 中央底池与公共牌
+              seats.add(Positioned(
+                left: cx,
+                top: cy,
+                child: Transform.translate(
+                  offset: const Offset(-110, -62),
+                  child: SizedBox(width: 220, child: centerArea),
+                ),
+              ));
+              // 各座位
+              for (final p in players) {
+                final seat = (p['seat'] as int?) ?? 0;
+                final rScreen = n > 0 ? (((seat - mySeat) % n) + n) % n : 0;
+                final angle = pi / 2 - rScreen * (2 * pi / (n > 0 ? n : 1));
+                final x = cx + rx * cos(angle);
+                final y = cy + ry * sin(angle);
+                final relPos = dealerSeat >= 0 && n > 0
+                    ? (((seat - dealerSeat) % n) + n) % n
+                    : -1;
+                final pos = relPos >= 0 ? _posLabel(relPos, n) : '';
+                seats.add(Positioned(
+                  left: x,
+                  top: y,
+                  child: Transform.translate(
+                    offset: const Offset(-62, -50),
+                    child: _buildSeat(p, p['id'] == _c.playerId, pos),
+                  ),
+                ));
+              }
+              return Stack(children: seats);
+            },
+          );
 
           return Column(
             children: [
               // 状态条
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 6),
                 color: Colors.black38,
                 child: Column(
                   children: [
-                    Text(_stageLabels[stage] ?? stage,
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    Text('底池：$pot　当前注额：$currentBet'
-                        '${_c.ante > 0 ? '　前注：${_c.ante}' : ''}'),
                     if (_c.canStartHand)
                       Padding(
-                        padding: const EdgeInsets.only(top: 6),
+                        padding: const EdgeInsets.only(top: 4),
                         child: ElevatedButton(
                           onPressed: _c.startHand,
                           child: Text(isDealerFirst ? '房主发牌（首手）' : '庄家发牌'),
@@ -268,7 +372,7 @@ class _TablePageState extends State<TablePage> {
                       )
                     else if (!inProgress)
                       const Padding(
-                        padding: EdgeInsets.only(top: 6),
+                        padding: EdgeInsets.only(top: 4),
                         child: Text('等待庄家开始下一手', style: TextStyle(color: Colors.white70)),
                       ),
                   ],
@@ -297,21 +401,8 @@ class _TablePageState extends State<TablePage> {
                     ],
                   ),
                 ),
-              // 公共牌
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(5, (i) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: i < community.length
-                          ? PokerCardView(card: community[i])
-                          : PokerCardView(card: null, width: 40, height: 56),
-                    );
-                  }),
-                ),
-              ),
+              // 牌桌图形
+              Expanded(child: tableArea),
               // 本手结果
               if (lastResult != null && !inProgress)
                 Container(
@@ -324,93 +415,32 @@ class _TablePageState extends State<TablePage> {
                   child: Text(lastResult['note']?.toString() ?? '',
                       textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
                 ),
-              // 玩家列表
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  children: players.map((p) {
-                    final cards = (p['cards'] as List? ?? [])
-                        .map((c) => PokerCard.fromJson(c as Map<String, dynamic>))
-                        .toList();
-                    final isTurn = p['isTurn'] == true;
-                    final tempLeft = p['tempLeft'] == true;
-                    final totalBuyIn = p['totalBuyIn'] as int?;
-                    final winLoss = p['winLoss'] as int?;
-                    return Card(
-                      color: isTurn ? Colors.green.shade900 : null,
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: p['isDealer'] == true ? Colors.amber : Colors.grey,
-                          child: Text(p['seat'].toString()),
-                        ),
-                        title: Text(p['name'] ?? '玩家'),
-                        subtitle: Text(
-                            '筹码 ${p['chips']}　本手下注 ${p['bet']}'
-                            '${totalBuyIn != null ? '　总买入 $totalBuyIn' : ''}'
-                            '${winLoss != null ? '　输赢 ${winLoss >= 0 ? '+' : ''}$winLoss' : ''}'
-                            '${p['folded'] == true && !tempLeft ? ' · 已弃牌' : ''}'
-                            '${tempLeft ? ' · 暂离' : ''}'
-                            '${p['allIn'] == true ? ' · 全下' : ''}'
-                            '${p['acted'] == true && p['folded'] != true && p['allIn'] != true && !tempLeft ? ' · 已行动' : ''}'),
-                        trailing: SizedBox(
-                          width: 96,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: cards
-                                .map((c) => PokerCardView(card: c, width: 30, height: 42))
-                                .toList(),
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
-              // 我的底牌 + 我的管理操作
-              if (me != null)
+              // 我的管理操作（非行动时可见）
+              if (me != null && !myTurn)
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.symmetric(vertical: 6),
                   color: Colors.black45,
-                  child: Column(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Text('我的手牌：', style: TextStyle(fontWeight: FontWeight.bold)),
-                          const SizedBox(width: 8),
-                          ...((me['cards'] as List? ?? [])
-                                  .map((c) => PokerCardView(
-                                      card: PokerCard.fromJson(c as Map<String, dynamic>)))
-                                  .toList())
-                              .cast<Widget>(),
-                          if ((me['cards'] as List? ?? []).isEmpty)
-                            const Text('（未发牌）', style: TextStyle(color: Colors.white54)),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          if (me['tempLeft'] == true)
-                            ElevatedButton(
-                              onPressed: _c.returnTable,
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-                              child: const Text('返回牌桌'),
-                            )
-                          else ...[
-                            ElevatedButton(
-                              onPressed: _c.tempLeave,
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
-                              child: const Text('暂时离桌'),
-                            ),
-                            const SizedBox(width: 8),
-                            ElevatedButton(
-                              onPressed: (!inProgress || myTurn) ? null : _showBuyCashout,
-                              child: const Text('补充/赎回'),
-                            ),
-                          ]
-                        ],
-                      ),
+                      if (me['tempLeft'] == true)
+                        ElevatedButton(
+                          onPressed: _c.returnTable,
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                          child: const Text('返回牌桌'),
+                        )
+                      else ...[
+                        ElevatedButton(
+                          onPressed: _c.tempLeave,
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
+                          child: const Text('暂时离桌'),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: (!inProgress) ? _showBuyCashout : null,
+                          child: const Text('补充/赎回'),
+                        ),
+                      ]
                     ],
                   ),
                 ),
@@ -470,6 +500,85 @@ class _TablePageState extends State<TablePage> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  // 单个座位卡片（围绕牌桌显示）
+  Widget _buildSeat(Map<String, dynamic> p, bool isSelf, String pos) {
+    final name = (p['name']?.toString() ?? '玩家');
+    final chips = (p['chips'] as int?) ?? 0;
+    final bet = (p['bet'] as int?) ?? 0;
+    final folded = p['folded'] == true;
+    final allIn = p['allIn'] == true;
+    final isTurn = p['isTurn'] == true;
+    final isDealer = p['isDealer'] == true;
+    final cards = (p['cards'] as List? ?? [])
+        .map((c) => PokerCard.fromJson(c as Map<String, dynamic>))
+        .toList();
+    final cardRow = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(2, (i) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 1),
+          child: i < cards.length
+              ? PokerCardView(card: cards[i], width: 24, height: 34)
+              : PokerCardView(card: null, width: 24, height: 34),
+        );
+      }),
+    );
+
+    return Container(
+      width: 124,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      decoration: BoxDecoration(
+        color: isTurn ? Colors.green.shade800 : Colors.black54,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isTurn ? Colors.amber : (isDealer ? Colors.amber.shade200 : Colors.green.shade900),
+          width: isTurn ? 2.5 : 1.5,
+        ),
+      ),
+      child: Opacity(
+        opacity: folded ? 0.45 : 1,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (pos.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: pos == 'BTN' ? Colors.amber : Colors.blueGrey,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(pos, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                if (isSelf)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 4),
+                    child: Text('我', style: TextStyle(fontSize: 11, color: Colors.amber)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+            Text('筹码 $chips', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+            if (bet > 0)
+              Text('下注 $bet', style: const TextStyle(fontSize: 11, color: Colors.orange)),
+            const SizedBox(height: 3),
+            cardRow,
+            if (allIn)
+              const Text('ALL IN', style: TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.bold)),
+            if (folded)
+              const Text('弃牌', style: TextStyle(fontSize: 11, color: Colors.white54)),
+          ],
+        ),
       ),
     );
   }

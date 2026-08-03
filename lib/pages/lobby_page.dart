@@ -77,6 +77,24 @@ class _LobbyPageState extends State<LobbyPage> {
   int _i(TextEditingController c, int dflt) =>
       int.tryParse(c.text.trim()) ?? dflt;
 
+  // 默认房间名：基础名若已被占用，则自动加 2/3… 后缀（房间名不可重复）
+  String _defaultRoomName() {
+    const base = '财富西环线上扑克室';
+    final names = _c.roomList.map((r) {
+      final n = r is Map ? r['name'] : null;
+      return n is String ? n.trim().toLowerCase() : '';
+    }).toList();
+    if (!names.contains(base.toLowerCase())) return base;
+    int i = 2;
+    while (names.contains('$base$i'.toLowerCase())) i++;
+    return '$base$i';
+  }
+
+  void _startCreate() {
+    _roomNameCtrl.text = _defaultRoomName();
+    setState(() => _creating = true);
+  }
+
   void _create() {
     final buyIn = _i(_buyInCtrl, 1000);
     final sb = _i(_sbCtrl, 10);
@@ -276,7 +294,7 @@ class _LobbyPageState extends State<LobbyPage> {
             TextButton(onPressed: _c.listRooms, child: const Text('刷新')),
             const SizedBox(width: 8),
             ElevatedButton.icon(
-              onPressed: () => setState(() => _creating = true),
+              onPressed: () => _startCreate(),
               icon: const Icon(Icons.add),
               label: const Text('创建'),
             ),
@@ -298,7 +316,7 @@ class _LobbyPageState extends State<LobbyPage> {
                       style: TextStyle(color: Colors.white70), textAlign: TextAlign.center),
                   const SizedBox(height: 14),
                   ElevatedButton(
-                    onPressed: () => setState(() => _creating = true),
+                    onPressed: () => _startCreate(),
                     child: const Text('创建房间'),
                   ),
                 ],
@@ -308,12 +326,23 @@ class _LobbyPageState extends State<LobbyPage> {
         else
           ...list.map((r) {
             final room = r as Map<String, dynamic>;
+            final members = (room['members'] as List?)
+                    ?.map((e) => e.toString())
+                    .toList() ??
+                [];
+            final sub = <String>[
+              '盲注 ${room['smallBlind']}/${room['bigBlind']}',
+              if ((room['ante'] ?? 0) > 0) '前注 ${room['ante']}',
+              '买入 ${room['minBuyIn']}–${room['maxBuyIn']}',
+              '${room['players']}人'
+                  '${room['botCount'] != null && room['botCount'] > 0 ? ' · AI×${room['botCount']}' : ''}',
+              if (members.isNotEmpty) '成员：${members.join('、')}',
+              if (room['hasPassword'] == true) '有密码',
+            ];
             return Card(
               child: ListTile(
                 title: Text(room['name'] ?? '房间'),
-                subtitle: Text(
-                    '房间号 ${room['id']} · ${room['players']}人 · 盲注 ${room['smallBlind']}/${room['bigBlind']}'
-                    '${room['hasPassword'] == true ? ' · 有密码' : ''}'),
+                subtitle: Text(sub.join('　'), style: const TextStyle(fontSize: 13)),
                 trailing: ElevatedButton(
                   onPressed: () {
                     _roomCtrl.text = room['id'] ?? '';
