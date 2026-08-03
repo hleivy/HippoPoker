@@ -1,7 +1,7 @@
 name: poker_client
 description: 德州扑克远程对战安卓客户端（虚拟积分娱乐场）
 publish_to: 'none'
-version: 0.0.1+1
+version: 0.0.2+2
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
