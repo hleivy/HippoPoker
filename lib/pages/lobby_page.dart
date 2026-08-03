@@ -412,7 +412,10 @@ class _LobbyPageState extends State<LobbyPage> {
           }).toList(),
         const SizedBox(height: 16),
         Center(
-          child: Text('内部测试版 v$kAppVersion', style: const TextStyle(color: Colors.white54)),
+          child: Text(
+            '内部测试版 v$kAppVersion · 服务端 v${_c.serverVersion ?? '连接中…'}',
+            style: const TextStyle(color: Colors.white54),
+          ),
         ),
       ],
     );

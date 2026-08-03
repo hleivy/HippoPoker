@@ -35,6 +35,7 @@ class GameController extends ChangeNotifier {
 
   Map<String, dynamic>? state;
   List<dynamic> roomList = [];
+  String? serverVersion;
 
   // ---- 暂时离桌 / 思考超时 ----
   bool timeoutWarning = false; // 仅剩 10 秒即将自动暂离时为 true
@@ -117,10 +118,12 @@ class GameController extends ChangeNotifier {
         break;
       case 'roomUpdate':
         state = msg['state'] as Map<String, dynamic>?;
+        serverVersion = (msg['serverVersion'] ?? state?['serverVersion'])?.toString();
         _onRoomUpdate();
         break;
       case 'roomList':
         roomList = (msg['rooms'] as List?) ?? [];
+        serverVersion = msg['serverVersion']?.toString() ?? serverVersion;
         break;
       case 'error':
         errorMsg = msg['message'] as String?;
