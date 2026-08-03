@@ -6,7 +6,6 @@ import '../game_controller.dart';
 import '../models/card_model.dart';
 import '../widgets/poker_card.dart';
 import 'lobby_page.dart';
-import 'hand_history_page.dart';
 
 class TablePage extends StatefulWidget {
   final GameController controller;
@@ -106,6 +105,56 @@ class _TablePageState extends State<TablePage> {
     }
   }
 
+  // 历史手牌：牌桌页内弹框，不打断正常打牌（功能 7，不切页）
+  void _showHistoryDialog() {
+    final serverHist = _c.handHistory;
+    showDialog(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: const Text('历史手牌'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 360,
+          child: FutureBuilder<List<String>>(
+            future: _c.readHistory(),
+            builder: (_, snap) {
+              final local = snap.data ?? [];
+              final items = <String>[];
+              for (final h in serverHist) {
+                if (h is Map) {
+                  final line = h['line']?.toString() ?? h.toString();
+                  if (line.isNotEmpty) items.add(line);
+                } else if (h != null) {
+                  items.add(h.toString());
+                }
+              }
+              items.addAll(local);
+              if (items.isEmpty) {
+                return const Center(
+                  child: Text('暂无历史手牌记录', style: TextStyle(color: Colors.white70)),
+                );
+              }
+              return ListView(
+                children: items.reversed
+                    .map((e) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: Text(e, style: const TextStyle(fontSize: 13)),
+                        ))
+                    .toList(),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(),
+            child: const Text('关闭'),
+          )
+        ],
+      ),
+    );
+  }
+
   void _showBuyCashout() {
     final unit = _c.buyInUnit;
     final maxBuy = _c.maxBuyIn;
@@ -189,6 +238,15 @@ class _TablePageState extends State<TablePage> {
     );
   }
 
+  // 应发牌者昵称（用于提示“等待 X 发牌”）
+  String _starterName(List<Map<String, dynamic>> players, String starterId) {
+    if (starterId.isEmpty) return '庄家';
+    for (final p in players) {
+      if (p['id'] == starterId) return (p['name']?.toString() ?? '玩家');
+    }
+    return '庄家';
+  }
+
   // 根据相对庄家的座位序号计算位置标签（BTN/SB/BB/UTG/MP/CO）
   String _posLabel(int rel, int n) {
     if (rel == 0) return 'BTN';
@@ -218,8 +276,7 @@ class _TablePageState extends State<TablePage> {
                 style: TextStyle(color: _autoCall ? Colors.amber : Colors.white)),
           ),
           TextButton(
-            onPressed: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => HandHistoryPage(controller: _c))),
+            onPressed: _showHistoryDialog,
             child: const Text('历史', style: TextStyle(color: Colors.white)),
           ),
           TextButton(
@@ -257,10 +314,9 @@ class _TablePageState extends State<TablePage> {
           final canRaise = maxTarget > minTarget;
           final target = _raiseTarget.clamp(minTarget, maxTarget);
           final lastResult = state['lastResult'] as Map<String, dynamic>?;
-          final dealerSeat = (state['dealerSeat'] as int? ?? -1);
+              final dealerSeat = (state['dealerSeat'] as int? ?? -1);
           final mySeat = me?['seat'] as int? ?? -1;
           final n = players.length;
-          final isDealerFirst = dealerSeat < 0;
 
           // 居中区：底池 + 公共牌
           Widget centerArea = Column(
@@ -280,10 +336,10 @@ class _TablePageState extends State<TablePage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(5, (i) {
                   return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: i < community.length
-                        ? PokerCardView(card: community[i])
-                        : PokerCardView(card: null, width: 40, height: 56),
+                        ? PokerCardView(card: community[i], width: 50, height: 70)
+                        : PokerCardView(card: null, width: 50, height: 70),
                   );
                 }),
               ),
@@ -303,7 +359,22 @@ class _TablePageState extends State<TablePage> {
               final rx = w * 0.40;
               final ry = h * 0.37;
               final seats = <Widget>[];
-              // 椭圆牌桌（绿绒）
+              // 赌场椭圆牌桌：木边 + 绿绒椭圆台面
+              seats.add(Positioned(
+                left: cx - rx - 12,
+                top: cy - ry - 12,
+                child: Container(
+                  width: (rx + 12) * 2,
+                  height: (ry + 12) * 2,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(ry + 12),
+                    color: const Color(0x8B5E3C), // 木质外圈
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black54, blurRadius: 16, spreadRadius: 3)
+                    ],
+                  ),
+                ),
+              ));
               seats.add(Positioned(
                 left: cx - rx,
                 top: cy - ry,
@@ -311,11 +382,11 @@ class _TablePageState extends State<TablePage> {
                   width: rx * 2,
                   height: ry * 2,
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
+                    borderRadius: BorderRadius.circular(ry), // 椭圆（胶囊形，经典牌桌轮廓）
                     color: const Color(0xFF0E5C3A),
-                    border: Border.all(color: Colors.green.shade700, width: 6),
+                    border: Border.all(color: const Color(0x6B8E23), width: 4),
                     boxShadow: const [
-                      BoxShadow(color: Colors.black45, blurRadius: 12, spreadRadius: 2)
+                      BoxShadow(color: Colors.black38, blurRadius: 10, spreadRadius: 2)
                     ],
                   ),
                 ),
@@ -344,7 +415,7 @@ class _TablePageState extends State<TablePage> {
                   left: x,
                   top: y,
                   child: Transform.translate(
-                    offset: const Offset(-62, -50),
+                    offset: const Offset(-78, -52),
                     child: _buildSeat(p, p['id'] == _c.playerId, pos),
                   ),
                 ));
@@ -363,17 +434,33 @@ class _TablePageState extends State<TablePage> {
                 child: Column(
                   children: [
                     if (_c.canStartHand)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: ElevatedButton(
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        child: ElevatedButton.icon(
                           onPressed: _c.startHand,
-                          child: Text(isDealerFirst ? '房主发牌（首手）' : '庄家发牌'),
+                          icon: const Icon(Icons.play_arrow, size: 22),
+                          label: Text(
+                            (me != null && me['isDealer'] == true)
+                                ? '我是庄家 · 发下一手牌'
+                                : '轮到我发牌（庄家是 AI）',
+                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amber,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            minimumSize: const Size.fromHeight(52),
+                          ),
                         ),
                       )
                     else if (!inProgress)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 4),
-                        child: Text('等待庄家开始下一手', style: TextStyle(color: Colors.white70)),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '等待 ${_starterName(players, _c.starterId)} 发下一手牌…',
+                          style: const TextStyle(color: Colors.white70, fontSize: 14),
+                        ),
                       ),
                   ],
                 ),
@@ -520,23 +607,23 @@ class _TablePageState extends State<TablePage> {
       mainAxisSize: MainAxisSize.min,
       children: List.generate(2, (i) {
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 2),
           child: i < cards.length
-              ? PokerCardView(card: cards[i], width: 24, height: 34)
-              : PokerCardView(card: null, width: 24, height: 34),
+              ? PokerCardView(card: cards[i], width: 40, height: 56)
+              : PokerCardView(card: null, width: 40, height: 56),
         );
       }),
     );
 
     return Container(
-      width: 124,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      width: 156,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
         color: isTurn ? Colors.green.shade800 : Colors.black54,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isTurn ? Colors.amber : (isDealer ? Colors.amber.shade200 : Colors.green.shade900),
-          width: isTurn ? 2.5 : 1.5,
+          width: isTurn ? 3 : 2,
         ),
       ),
       child: Opacity(
@@ -549,34 +636,34 @@ class _TablePageState extends State<TablePage> {
               children: [
                 if (pos.isNotEmpty)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: pos == 'BTN' ? Colors.amber : Colors.blueGrey,
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: Text(pos, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    child: Text(pos, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                   ),
                 if (isSelf)
                   const Padding(
-                    padding: EdgeInsets.only(left: 4),
-                    child: Text('我', style: TextStyle(fontSize: 11, color: Colors.amber)),
+                    padding: EdgeInsets.only(left: 5),
+                    child: Text('我', style: TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold)),
                   ),
               ],
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 3),
             Text(name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-            Text('筹码 $chips', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+            Text('筹码 $chips', style: const TextStyle(fontSize: 13, color: Colors.white70)),
             if (bet > 0)
-              Text('下注 $bet', style: const TextStyle(fontSize: 11, color: Colors.orange)),
-            const SizedBox(height: 3),
+              Text('下注 $bet', style: const TextStyle(fontSize: 13, color: Colors.orange)),
+            const SizedBox(height: 4),
             cardRow,
             if (allIn)
-              const Text('ALL IN', style: TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.bold)),
+              const Text('ALL IN', style: TextStyle(fontSize: 13, color: Colors.red, fontWeight: FontWeight.bold)),
             if (folded)
-              const Text('弃牌', style: TextStyle(fontSize: 11, color: Colors.white54)),
+              const Text('弃牌', style: TextStyle(fontSize: 12, color: Colors.white54)),
           ],
         ),
       ),

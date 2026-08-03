@@ -22,7 +22,7 @@ class _LobbyPageState extends State<LobbyPage> {
   final _pwdCtrl = TextEditingController();
   final _sbCtrl = TextEditingController(text: '10');
   final _bbCtrl = TextEditingController(text: '20');
-  final _buyInCtrl = TextEditingController(text: '1000');
+  int _buyInSelected = 1000;
   final _minBuyInCtrl = TextEditingController(text: '1000');
   final _maxBuyInCtrl = TextEditingController(text: '3999');
   final _buyInUnitCtrl = TextEditingController(text: '1000');
@@ -90,13 +90,28 @@ class _LobbyPageState extends State<LobbyPage> {
     return '$base$i';
   }
 
+  // 买入选项：下限到上限、按最小单位取整数倍（如 1000–3999/500 => 1000,1500,…,3500）
+  List<int> _buyInOptions() {
+    final min = _i(_minBuyInCtrl, 1000);
+    final max = _i(_maxBuyInCtrl, 3999);
+    final unit = _i(_buyInUnitCtrl, 1000).clamp(1, 999999);
+    final opts = <int>[];
+    int v = min;
+    while (v <= max) {
+      opts.add(v);
+      v += unit;
+    }
+    if (opts.isEmpty) opts.add(min);
+    return opts;
+  }
+
   void _startCreate() {
     _roomNameCtrl.text = _defaultRoomName();
     setState(() => _creating = true);
   }
 
   void _create() {
-    final buyIn = _i(_buyInCtrl, 1000);
+    final buyIn = _buyInSelected;
     final sb = _i(_sbCtrl, 10);
     final bb = _i(_bbCtrl, sb * 2);
     final ante = _hasAnte ? _i(_anteCtrl, sb) : 0;
@@ -122,17 +137,50 @@ class _LobbyPageState extends State<LobbyPage> {
     );
   }
 
-  void _join() {
-    final id = _roomCtrl.text.trim();
-    if (id.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('请输入房间号')));
-      return;
+  // 加入房间：弹出对话框让玩家从下限/上限/单位生成的有限选项中选择初始买入
+  void _showJoinDialog(Map<String, dynamic> room) {
+    final min = (room['minBuyIn'] as int?) ?? 1000;
+    final max = (room['maxBuyIn'] as int?) ?? 3999;
+    final unit = (room['buyInUnit'] as int?) ?? 1000;
+    final opts = <int>[];
+    int v = min;
+    while (v <= max) {
+      opts.add(v);
+      v += unit;
     }
-    final buyIn = _i(_buyInCtrl, 1000);
-    final nick = _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim();
-    _saveNickname();
-    _c.joinRoom(id, nick, buyIn, password: _pwdCtrl.text.trim());
+    if (opts.isEmpty) opts.add(min);
+    int sel = opts.first;
+    showDialog(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: Text('加入 ${room['name'] ?? '房间'}'),
+        content: DropdownButton<int>(
+          value: sel,
+          isExpanded: true,
+          items: opts
+              .map((o) => DropdownMenuItem(value: o, child: Text('初始买入：$o')))
+              .toList(),
+          onChanged: (v) => sel = v ?? sel,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dctx).pop();
+              final nick =
+                  _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim();
+              _saveNickname();
+              _c.joinRoom(room['id']?.toString() ?? '', nick, sel,
+                  password: _pwdCtrl.text.trim());
+            },
+            child: const Text('加入'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -210,8 +258,6 @@ class _LobbyPageState extends State<LobbyPage> {
                 const SizedBox(height: 8),
                 Row(children: [
                   _numField('买入最小单位', _buyInUnitCtrl),
-                  const SizedBox(width: 8),
-                  _numField('初始买入', _buyInCtrl),
                 ]),
                 const SizedBox(height: 8),
                 SwitchListTile(
@@ -240,6 +286,17 @@ class _LobbyPageState extends State<LobbyPage> {
                     child: Text(i == 0 ? '无（真人局）' : '$i 个 AI 牌手'),
                   )),
                   onChanged: (v) => setState(() => _aiCount = v ?? 0),
+                ),
+                const SizedBox(height: 8),
+                DropdownButton<int>(
+                  value: _buyInOptions().contains(_buyInSelected)
+                      ? _buyInSelected
+                      : _buyInOptions().first,
+                  isExpanded: true,
+                  items: _buyInOptions()
+                      .map((v) => DropdownMenuItem(value: v, child: Text('我的初始买入：$v')))
+                      .toList(),
+                  onChanged: (v) => setState(() => _buyInSelected = v ?? _buyInSelected),
                 ),
                 const SizedBox(height: 8),
                 ElevatedButton(
@@ -344,10 +401,7 @@ class _LobbyPageState extends State<LobbyPage> {
                 title: Text(room['name'] ?? '房间'),
                 subtitle: Text(sub.join('　'), style: const TextStyle(fontSize: 13)),
                 trailing: ElevatedButton(
-                  onPressed: () {
-                    _roomCtrl.text = room['id'] ?? '';
-                    _join();
-                  },
+                  onPressed: () => _showJoinDialog(room),
                   child: const Text('加入'),
                 ),
               ),

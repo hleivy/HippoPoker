@@ -274,15 +274,17 @@ class GameController extends ChangeNotifier {
   int get smallBlind => (state?['smallBlind'] as int?) ?? 0;
   int get bigBlind => (state?['bigBlind'] as int?) ?? 0;
 
-  // 仅庄家（首手为房主）可开始一手牌
+  // 当前应发牌者（庄家，或其下家链第一个人类），由服务端计算下发
+  String? get starterId => (state?['starterId'] as String?) ?? '';
+
+  // 仅"应发牌者"可开始一手牌（首手为房主，后续为庄家/其下家人类）
   bool get canStartHand {
     if (state == null) return false;
     if (state!['handInProgress'] == true) return false;
     final m = me;
     if (m == null) return false;
-    final dealerSeat = (state!['dealerSeat'] as int?) ?? -1;
-    if (dealerSeat < 0) return isHost;
-    return m['isDealer'] == true;
+    final starter = state!['starterId'];
+    return starter != null && starter == playerId;
   }
 
   List<dynamic> get handHistory => (state?['handHistory'] as List?) ?? [];
