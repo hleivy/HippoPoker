@@ -18,7 +18,6 @@ class _LobbyPageState extends State<LobbyPage> {
   late final GameController _c = widget.controller;
   final _nameCtrl = TextEditingController();
   final _roomNameCtrl = TextEditingController(text: '财富西环线上扑克室');
-  final _roomCtrl = TextEditingController();
   final _pwdCtrl = TextEditingController();
   final _sbCtrl = TextEditingController(text: '10');
   final _bbCtrl = TextEditingController(text: '20');
@@ -152,33 +151,37 @@ class _LobbyPageState extends State<LobbyPage> {
     int sel = opts.first;
     showDialog(
       context: context,
-      builder: (dctx) => AlertDialog(
-        title: Text('加入 ${room['name'] ?? '房间'}'),
-        content: DropdownButton<int>(
-          value: sel,
-          isExpanded: true,
-          items: opts
-              .map((o) => DropdownMenuItem(value: o, child: Text('初始买入：$o')))
-              .toList(),
-          onChanged: (v) => sel = v ?? sel,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dctx).pop(),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(dctx).pop();
-              final nick =
-                  _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim();
-              _saveNickname();
-              _c.joinRoom(room['id']?.toString() ?? '', nick, sel,
-                  password: _pwdCtrl.text.trim());
+      builder: (dctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: Text('加入 ${room['name'] ?? '房间'}'),
+          content: DropdownButton<int>(
+            value: sel,
+            isExpanded: true,
+            items: opts
+                .map((o) => DropdownMenuItem(value: o, child: Text('初始买入：$o')))
+                .toList(),
+            onChanged: (val) {
+              if (val != null) setSt(() => sel = val);
             },
-            child: const Text('加入'),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dctx).pop(),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dctx).pop();
+                final nick =
+                    _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim();
+                _saveNickname();
+                _c.joinRoom(room['id']?.toString() ?? '', nick, sel,
+                    password: _pwdCtrl.text.trim());
+              },
+              child: const Text('加入'),
+            ),
+          ],
+        ),
       ),
     );
   }

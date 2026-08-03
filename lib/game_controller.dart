@@ -275,7 +275,7 @@ class GameController extends ChangeNotifier {
   int get bigBlind => (state?['bigBlind'] as int?) ?? 0;
 
   // 当前应发牌者（庄家，或其下家链第一个人类），由服务端计算下发
-  String? get starterId => (state?['starterId'] as String?) ?? '';
+  String get starterId => (state?['starterId'] as String?) ?? '';
 
   // 仅"应发牌者"可开始一手牌（首手为房主，后续为庄家/其下家人类）
   bool get canStartHand {
