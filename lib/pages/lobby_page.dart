@@ -189,8 +189,9 @@ class _LobbyPageState extends State<LobbyPage> {
     );
   }
 
-  // 房主在大厅直接设置房间参数（持久房间：不必进入房间即可管理）
-  void _showRoomSettingsDialog(Map<String, dynamic> room) {
+  // 在大厅直接设置房间参数（持久房间：不必进入房间即可管理）
+  // [adminPassword] 非空时使用管理员通道（无需是该房间房主）
+  void _showRoomSettingsDialog(Map<String, dynamic> room, {String? adminPassword}) {
     final nameCtrl = TextEditingController(text: '${room['name'] ?? ''}');
     final sbCtrl = TextEditingController(text: '${(room['smallBlind'] as int?) ?? 10}');
     final bbCtrl = TextEditingController(text: '${(room['bigBlind'] as int?) ?? 20}');
@@ -261,7 +262,11 @@ class _LobbyPageState extends State<LobbyPage> {
                   'extensionCount': _i(ecCtrl, 2).clamp(0, 20),
                   'extensionSeconds': _i(esCtrl, 60).clamp(0, 300),
                 };
-                _c.updateRoom(params);
+                if (adminPassword != null && adminPassword.isNotEmpty) {
+                  _c.adminUpdateRoom({...params, 'password': adminPassword});
+                } else {
+                  _c.updateRoom(params);
+                }
                 Navigator.of(ctx).pop();
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('房间设置已保存')));
               },
@@ -323,6 +328,80 @@ class _LobbyPageState extends State<LobbyPage> {
     );
   }
 
+  // 管理密码校验（当前固定 1507）
+  Future<bool> _verifyAdminPassword() async {
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('房间管理'),
+        content: TextField(
+          controller: ctrl,
+          obscureText: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: '管理密码', hintText: '1507'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim() == '1507'), child: const Text('确定')),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  // 房间管理：输入密码后可删除任意房间
+  void _showRoomManagementDialog() async {
+    final ok = await _verifyAdminPassword();
+    if (!ok) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('密码错误')));
+      return;
+    }
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('房间管理'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: _c.roomList.map((r) {
+              final room = r as Map<String, dynamic>;
+              return ListTile(
+                title: Text(room['name'] ?? '房间'),
+                subtitle: Text('${room['players']}人 · 盲注 ${room['smallBlind']}/${room['bigBlind']}'),
+                trailing: TextButton(
+                  onPressed: () async {
+                    final confirm = await showDialog<bool>(
+                      context: ctx,
+                      builder: (_) => AlertDialog(
+                        title: const Text('删除房间'),
+                        content: Text('确定删除「${room['name'] ?? '房间'}」吗？'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.of(_).pop(false), child: const Text('取消')),
+                          TextButton(onPressed: () => Navigator.of(_).pop(true), child: const Text('删除', style: TextStyle(color: Colors.red))),
+                        ],
+                      ),
+                    );
+                    if (confirm == true) {
+                      _c.adminDeleteRoom(room['id']?.toString() ?? '', '1507');
+                      Navigator.of(ctx).pop();
+                    }
+                  },
+                  child: const Text('删除', style: TextStyle(color: Colors.red)),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('关闭')),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _listTimer?.cancel();
@@ -374,10 +453,10 @@ class _LobbyPageState extends State<LobbyPage> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Center(
+                         Center(
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(18),
-                child: Image.asset('assets/images/app_icon.png', width: 84, height: 84),
+                borderRadius: BorderRadius.circular(28),
+                child: Image.asset('assets/images/app_icon.png', width: 160, height: 160),
               ),
             ),
             const SizedBox(height: 12),
@@ -475,8 +554,8 @@ class _LobbyPageState extends State<LobbyPage> {
           children: [
             Center(
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(18),
-                child: Image.asset('assets/images/app_icon.png', width: 84, height: 84),
+                borderRadius: BorderRadius.circular(28),
+                child: Image.asset('assets/images/app_icon.png', width: 160, height: 160),
               ),
             ),
             const SizedBox(height: 10),
@@ -490,6 +569,12 @@ class _LobbyPageState extends State<LobbyPage> {
                 const Text('公开房间', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 const Spacer(),
                 TextButton(onPressed: _c.listRooms, child: const Text('刷新')),
+                const SizedBox(width: 8),
+                TextButton.icon(
+                  onPressed: _showRoomManagementDialog,
+                  icon: const Icon(Icons.admin_panel_settings),
+                  label: const Text('房间管理'),
+                ),
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
                   onPressed: () => _startCreate(),
@@ -538,13 +623,24 @@ class _LobbyPageState extends State<LobbyPage> {
                   if (room['hasPassword'] == true) '有密码',
                 ];
                 final isInThisRoom = _c.roomId == room['id']?.toString();
-                final isHost = room['hostId']?.toString() == _c.playerId;
                 return Card(
                   child: ListTile(
                     title: Text(room['name'] ?? '房间'),
                     subtitle: Text(sub.join('　'), style: const TextStyle(fontSize: 13)),
-                    trailing: isInThisRoom
-                        ? ElevatedButton(
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(
+                          onPressed: () async {
+                            final ok = await _verifyAdminPassword();
+                            if (ok && mounted) _showRoomSettingsDialog(room, adminPassword: '1507');
+                            else if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('密码错误')));
+                          },
+                          child: const Text('设置'),
+                        ),
+                        const SizedBox(width: 4),
+                        if (isInThisRoom)
+                          ElevatedButton(
                             onPressed: () {
                               _navigated = true;
                               Navigator.of(context).push(
@@ -553,30 +649,13 @@ class _LobbyPageState extends State<LobbyPage> {
                             },
                             child: const Text('进入'),
                           )
-                        : isHost
-                            ? Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  TextButton(
-                                    onPressed: () => _showRoomSettingsDialog(room),
-                                    child: const Text('设置'),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  ElevatedButton(
-                                    onPressed: () {
-                                      _navigated = true;
-                                      Navigator.of(context).push(
-                                        MaterialPageRoute(builder: (_) => TablePage(controller: _c)),
-                                      );
-                                    },
-                                    child: const Text('进入'),
-                                  ),
-                                ],
-                              )
-                            : ElevatedButton(
-                                onPressed: () => _showJoinDialog(room),
-                                child: const Text('加入'),
-                              ),
+                        else
+                          ElevatedButton(
+                            onPressed: () => _showJoinDialog(room),
+                            child: const Text('加入'),
+                          ),
+                      ],
+                    ),
                   ),
                 );
               }).toList(),

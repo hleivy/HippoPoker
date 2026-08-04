@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../game_controller.dart';
 import '../storage/settings_storage.dart';
+import '../config.dart';
 import 'lobby_page.dart';
 
 class NicknameGate extends StatefulWidget {
@@ -82,8 +83,8 @@ class _NicknameGateState extends State<NicknameGate> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(28),
-                child: Image.asset('assets/images/app_icon.png', width: 220, height: 220),
+                borderRadius: BorderRadius.circular(36),
+                child: Image.asset('assets/images/app_icon.png', width: 320, height: 320),
               ),
               const SizedBox(height: 20),
               const Text('欢迎来到河马扑克',
@@ -114,6 +115,9 @@ class _NicknameGateState extends State<NicknameGate> {
               const SizedBox(height: 10),
               const Text('设置后下次进入将自动沿用，可在大厅页面修改。',
                   style: TextStyle(color: Colors.white54, fontSize: 12)),
+              const SizedBox(height: 16),
+              Text('内部测试版 v$kAppVersion',
+                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
             ],
           ),
         ),

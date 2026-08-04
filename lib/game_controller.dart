@@ -314,8 +314,16 @@ class GameController extends ChangeNotifier {
   /// 房主修改房间参数
   void updateRoom(Map<String, dynamic> params) => _send({'type': 'updateRoom', ...params});
 
-  /// 房主删除房间
+  /// 房主删除当前房间
   void deleteRoom() => _send({'type': 'deleteRoom'});
+
+  /// 管理员（知道管理密码）删除任意房间
+  void adminDeleteRoom(String roomId, String password) =>
+      _send({'type': 'adminDeleteRoom', 'roomId': roomId.toUpperCase(), 'password': password});
+
+  /// 管理员（知道管理密码）修改任意房间参数
+  void adminUpdateRoom(Map<String, dynamic> params) =>
+      _send({'type': 'adminUpdateRoom', ...params});
 
   void clearError() {
     errorMsg = null;

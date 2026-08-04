@@ -312,7 +312,7 @@ class _TablePageState extends State<TablePage> {
     );
   }
 
-  // ---- 紧凑座位：无背景卡片，信息横向排布 ----
+  // ---- 座位：纵向卡片，头像/名字/筹码/手牌依次向下，避免重叠 ----
   Widget _buildSeat(Map<String, dynamic> p, bool isSelf, String pos, bool isDealer,
       {bool hideCards = false}) {
     final name = (p['name']?.toString() ?? '玩家');
@@ -331,16 +331,16 @@ class _TablePageState extends State<TablePage> {
 
     Widget handWidget;
     if (hideCards) {
-      handWidget = const SizedBox(width: 30);
+      handWidget = const SizedBox(width: 34);
     } else {
       handWidget = Row(
         mainAxisSize: MainAxisSize.min,
         children: List.generate(2, (i) {
           return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 1),
+            padding: const EdgeInsets.symmetric(horizontal: 2),
             child: i < cards.length
-                ? PokerCardView(card: cards[i], width: 28, height: 40)
-                : const CardBack(width: 28, height: 40),
+                ? PokerCardView(card: cards[i], width: 34, height: 48)
+                : const CardBack(width: 34, height: 48),
           );
         }),
       );
@@ -355,15 +355,14 @@ class _TablePageState extends State<TablePage> {
                 : null;
 
     return SizedBox(
-      width: 172,
-      child: Row(
+      width: 108,
+      child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // 头像 + 进度条 + 气泡
+          // 头像 + 位置徽章 + dealer 徽章 + 进度条 + 行动气泡
           SizedBox(
-            width: 52,
-            height: 72,
+            width: 72,
+            height: 78,
             child: Stack(
               clipBehavior: Clip.none,
               alignment: Alignment.center,
@@ -371,8 +370,8 @@ class _TablePageState extends State<TablePage> {
                 if (isTurn)
                   Positioned(
                     top: 0,
-                    left: 4,
-                    right: 4,
+                    left: 8,
+                    right: 8,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(2),
                       child: LinearProgressIndicator(
@@ -386,57 +385,108 @@ class _TablePageState extends State<TablePage> {
                     ),
                   ),
                 Positioned(
-                  top: 10,
+                  top: 8,
                   child: Container(
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       border: isTurn
-                          ? Border.all(color: Colors.amber, width: 2.5)
-                          : isDealer
-                              ? Border.all(color: Colors.amber.shade200, width: 1.5)
-                              : null,
+                          ? Border.all(color: Colors.amber, width: 3)
+                          : Border.all(color: Colors.white24, width: 1.5),
                       boxShadow: isTurn
-                          ? [BoxShadow(color: Colors.amber.withOpacity(0.55), blurRadius: 10, spreadRadius: 1)]
+                          ? [BoxShadow(color: Colors.amber.withOpacity(0.55), blurRadius: 12, spreadRadius: 1)]
                           : null,
                     ),
-                    child: _buildAvatar(name, radius: 22),
+                    child: _buildAvatar(name, radius: 30),
                   ),
                 ),
-                if (_buildActionBubble(p) case final bubble?)
-                  Positioned(top: -10, child: bubble),
-              ],
-            ),
-          ),
-          const SizedBox(width: 4),
-          // 名字 + 筹码 + 状态
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: isSelf ? Colors.amber : Colors.white)),
-                const SizedBox(height: 2),
-                _buildChipStack(chips),
-                if (statusText != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(statusText,
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: folded ? Colors.white54 : (allIn ? Colors.redAccent : Colors.orange))),
+                // 位置徽章（UTG/SB/BB/D 等）
+                if (pos.isNotEmpty)
+                  Positioned(
+                    top: 6,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: pos == 'BTN' ? Colors.amber : Colors.blueGrey.shade700,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white70, width: 0.5),
+                      ),
+                      child: Text(pos == 'BTN' ? 'D' : pos,
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
+                    ),
                   ),
+                if (_buildActionBubble(p) case final bubble?)
+                  Positioned(top: -12, child: bubble),
               ],
             ),
           ),
-          const SizedBox(width: 4),
+          // 名字（完整显示，最多两行）
+          Text(name,
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: isSelf ? Colors.amber : Colors.white)),
+          const SizedBox(height: 2),
+          // 筹码
+          _buildChipStack(chips),
+          if (statusText != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(statusText,
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: folded ? Colors.white54 : (allIn ? Colors.redAccent : Colors.orange))),
+            ),
+          const SizedBox(height: 4),
           // 手牌
           Opacity(opacity: folded ? 0.35 : 1, child: handWidget),
+        ],
+      ),
+    );
+  }
+
+  // 桌面上的庄家圆形筹码（D）
+  Widget _buildDealerChip() {
+    return Container(
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white,
+        border: Border.all(color: Colors.amber.shade700, width: 2),
+        boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 4)],
+      ),
+      alignment: Alignment.center,
+      child: Text('D', style: TextStyle(color: Colors.amber.shade800, fontWeight: FontWeight.bold, fontSize: 14)),
+    );
+  }
+
+  // 我的手牌条（固定在底部操作条上方，防止被遮挡）
+  Widget _buildMyHandBar(Map<String, dynamic>? me) {
+    if (me == null) return const SizedBox.shrink();
+    final cards = (me['cards'] as List? ?? [])
+        .map((c) => PokerCard.fromJson(c as Map<String, dynamic>))
+        .toList();
+    if (cards.isEmpty) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      color: Colors.black54,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('我的手牌', style: TextStyle(color: Colors.white70, fontSize: 12)),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: cards.map((c) => Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: PokerCardView(card: c, width: 56, height: 78),
+            )).toList(),
+          ),
         ],
       ),
     );
@@ -540,7 +590,21 @@ class _TablePageState extends State<TablePage> {
           ),
         ));
 
-        // 各座位与外侧标签
+        // 庄家筹码：放在庄家座位内侧（桌面区域）
+        if (dealerSeat >= 0 && n > 0) {
+          final dealerRel = (((dealerSeat - mySeat) % n) + n) % n;
+          final dPos = _seatPos(cx, cy, rx * 0.74, ry * 0.74, n, dealerRel);
+          items.add(Positioned(
+            left: dPos.dx,
+            top: dPos.dy,
+            child: Transform.translate(
+              offset: const Offset(-14, -14),
+              child: _buildDealerChip(),
+            ),
+          ));
+        }
+
+        // 各座位
         for (final p in players) {
           final seat = (p['seat'] as int?) ?? 0;
           final rel = n > 0 ? (((seat - mySeat) % n) + n) % n : 0;
@@ -574,37 +638,13 @@ class _TablePageState extends State<TablePage> {
             ));
           }
 
-          // 外侧位置标签（BTN/SB/BB/... 与 D 合并）
-          if (pos.isNotEmpty) {
-            final out = _outerPos(cx, cy, rx, ry, n, rel, 1.16);
-            items.add(Positioned(
-              left: out.dx,
-              top: out.dy,
-              child: Transform.translate(
-                offset: const Offset(-16, -10),
-                child: Container(
-                  width: 32,
-                  height: 20,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: pos == 'BTN' ? Colors.amber : Colors.blueGrey.shade700,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.white54, width: 0.5),
-                  ),
-                  child: Text(pos == 'BTN' ? 'D' : pos,
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
-                ),
-              ),
-            ));
-          }
-
-          // 座位信息本体
+          // 座位信息本体（纵向，居中）
           items.add(Positioned(
             left: posOffset.dx,
             top: posOffset.dy,
             child: Transform.translate(
-              offset: const Offset(-86, -36),
-              child: _buildSeat(p, isSelf, pos, isDealer, hideCards: isSelf),
+              offset: const Offset(-54, -75),
+              child: _buildSeat(p, isSelf, pos, isDealer, hideCards: false),
             ),
           ));
         }
@@ -631,17 +671,20 @@ class _TablePageState extends State<TablePage> {
     final stage = state['stage'] as String? ?? '';
     if (stage == 'ended' || stage == 'showdown' || stage == 'waiting') {
       if (_c.someonePaused) {
-        final names = _c.pausedIds
-            .map((id) => players.firstWhere((p) => p['id'] == id, orElse: () => {})['name']?.toString() ?? '玩家')
-            .where((n) => n.isNotEmpty)
-            .join('、');
         return Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.pause, color: Colors.amber, size: 16),
-            const SizedBox(width: 6),
-            Text('已暂停：$names 请求本手后暂停',
-                style: const TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.bold)),
+            const Icon(Icons.pause, color: Colors.amber, size: 18),
+            const SizedBox(width: 8),
+            const Text('已暂停下一手发牌',
+                style: TextStyle(color: Colors.amber, fontSize: 14, fontWeight: FontWeight.bold)),
+            const SizedBox(width: 12),
+            ElevatedButton.icon(
+              onPressed: _c.resumeNextHand,
+              icon: const Icon(Icons.play_arrow, size: 16),
+              label: const Text('继续发牌'),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+            ),
           ],
         );
       }
@@ -701,14 +744,16 @@ class _TablePageState extends State<TablePage> {
                       child: DropdownButton<String>(
                         value: _betPreset,
                         isDense: true,
-                        style: const TextStyle(fontSize: 13),
+                        dropdownColor: Colors.grey.shade900,
+                        style: const TextStyle(fontSize: 13, color: Colors.white),
+                        iconEnabledColor: Colors.white,
                         items: const [
-                          DropdownMenuItem(value: '1/3', child: Text('1/3 底池')),
-                          DropdownMenuItem(value: '1/2', child: Text('1/2 底池')),
-                          DropdownMenuItem(value: '2/3', child: Text('2/3 底池')),
-                          DropdownMenuItem(value: '满池', child: Text('满池')),
-                          DropdownMenuItem(value: '全下', child: Text('全下')),
-                          DropdownMenuItem(value: '自定义', child: Text('自定义')),
+                          DropdownMenuItem(value: '1/3', child: Text('1/3 底池', style: TextStyle(color: Colors.white))),
+                          DropdownMenuItem(value: '1/2', child: Text('1/2 底池', style: TextStyle(color: Colors.white))),
+                          DropdownMenuItem(value: '2/3', child: Text('2/3 底池', style: TextStyle(color: Colors.white))),
+                          DropdownMenuItem(value: '满池', child: Text('满池', style: TextStyle(color: Colors.white))),
+                          DropdownMenuItem(value: '全下', child: Text('全下', style: TextStyle(color: Colors.white))),
+                          DropdownMenuItem(value: '自定义', child: Text('自定义', style: TextStyle(color: Colors.white))),
                         ],
                         onChanged: (v) {
                           if (v == null) return;
@@ -774,13 +819,17 @@ class _TablePageState extends State<TablePage> {
         checked: _autoCall,
         child: const Text('自动跟注'),
       ),
+      CheckedPopupMenuItem(
+        value: 'pauseNextHand',
+        checked: _c.isPaused,
+        child: Text(_c.isPaused ? '取消下一手暂停' : '下一手牌暂停发牌'),
+      ),
       const PopupMenuDivider(),
       const PopupMenuItem(value: 'leave', child: Text('离开房间')),
     ];
     if (_c.amIHost) {
       items.insertAll(0, [
-        const PopupMenuItem(value: 'editRoom', child: Text('修改房间')),
-        const PopupMenuItem(value: 'deleteRoom', child: Text('删除房间')),
+        const PopupMenuItem(value: 'editRoom', child: Text('设置房间')),
         const PopupMenuDivider(),
       ]);
     }
@@ -873,27 +922,6 @@ class _TablePageState extends State<TablePage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  void _confirmDeleteRoom() {
-    showDialog(
-      context: context,
-      builder: (dctx) => AlertDialog(
-        title: const Text('删除房间'),
-        content: const Text('确定要删除当前房间吗？所有未结束的手牌将终止，且房间无法恢复。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(dctx).pop(), child: const Text('取消')),
-          TextButton(
-            onPressed: () {
-              Navigator.of(dctx).pop();
-              _c.deleteRoom();
-              Navigator.of(context).pop();
-            },
-            child: const Text('删除', style: TextStyle(color: Colors.redAccent)),
-          ),
-        ],
       ),
     );
   }
@@ -1150,11 +1178,6 @@ class _TablePageState extends State<TablePage> {
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: _leave),
         title: Text(roomName),
         actions: [
-          if (_c.handPaused)
-            TextButton(
-              onPressed: _c.resumeNextHand,
-              child: const Text('继续下一手', style: TextStyle(color: Colors.amber)),
-            ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (v) {
@@ -1177,11 +1200,15 @@ class _TablePageState extends State<TablePage> {
                     if (!_autoCall) _cancelAutoTimer();
                   });
                   break;
+                case 'pauseNextHand':
+                  if (_c.isPaused) {
+                    _c.resumeAfterHand();
+                  } else {
+                    _c.pauseAfterHand();
+                  }
+                  break;
                 case 'editRoom':
                   _showEditRoomDialog();
-                  break;
-                case 'deleteRoom':
-                  _confirmDeleteRoom();
                   break;
                 case 'leave':
                   _leave();
@@ -1199,7 +1226,6 @@ class _TablePageState extends State<TablePage> {
           if (_autoCall && _c.myTurn) _scheduleAutoCall(); else _cancelAutoTimer();
           if (state == null) return const Center(child: Text('等待房间状态…'));
 
-          final stage = state['stage'] as String? ?? '';
           final inProgress = state['handInProgress'] == true;
           final players = (state['players'] as List? ?? [])
               .map((p) => p as Map<String, dynamic>)
@@ -1272,14 +1298,17 @@ class _TablePageState extends State<TablePage> {
                           child: _buildTableArea(state, players, me, mySeat, n, dealerSeat, inProgress),
                         ),
                       ),
+                      _buildMyHandBar(me),
                       if (myTurn)
                         _buildActionBar(myTurn, callNeed, minTarget, maxTarget, target, canRaise, currentBet, pot),
                     ],
                   ),
-                  // 版本号：左下角，不遮挡主要内容
+                  // 版本号：左下角，避开我的手牌条/操作条
                   Positioned(
                     left: 8,
-                    bottom: myTurn ? 86 : 8,
+                    bottom: (me != null && (me['cards'] as List? ?? []).isNotEmpty)
+                        ? (myTurn ? 190 : 120)
+                        : 8,
                     child: Text(
                       '内部测试版 v$kAppVersion · 服务端 v${_c.serverVersion ?? '连接中…'}',
                       style: const TextStyle(color: Colors.white38, fontSize: 10),

@@ -7,4 +7,4 @@ const String SERVER_URL =
     'wss://express-b40d-290839-10-1462470907.sh.run.tcloudbase.com';
 
 /// 应用版本号（与 pubspec.yaml 保持一致，仅供界面展示）
-const String kAppVersion = '0.0.9';
+const String kAppVersion = '0.0.10';
