@@ -1,6 +1,5 @@
 // lib/main.dart —— 应用入口
 import 'package:flutter/material.dart';
-import 'game_controller.dart';
 import 'pages/nickname_gate.dart';
 
 void main() => runApp(const PokerApp());
