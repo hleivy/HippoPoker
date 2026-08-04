@@ -35,12 +35,20 @@ class GameController extends ChangeNotifier {
 
   Map<String, dynamic>? state;
   List<dynamic> roomList = [];
-  String? serverVersion;
+  String? serverVersion; // 服务端版本号（roomUpdate/roomList 下发）
+
+  // ---- 当前行动者倒计时（服务端权威下发，全桌可见）----
+  int turnRemaining = 0; // 当前行动者剩余行动秒数
+  int turnSeat = -1; // 当前轮到的座位
+  int actionTimeout = 60; // 房间设定的每轮行动时限(秒)
+
+  // ---- 退出结算 ----
+  Map<String, dynamic>? summary; // requestSummary 返回的个人统计
 
   // ---- 暂时离桌 / 思考超时 ----
   bool timeoutWarning = false; // 仅剩 10 秒即将自动暂离时为 true
   int delayClicks = 0; // 已使用的延时次数（最多 2）
-  int secondsLeft = 0; // 当前窗口剩余秒数（用于倒计时显示）
+  int secondsLeft = 0; // 当前窗口剩余秒数（用于倒计时显示，本地平滑递减）
   Map<String, dynamic>? dailyReport; // 最后一人离开时服务端下发的日报
 
   Timer? _tickTimer, _expireTimer, _warnTimer;
@@ -119,6 +127,11 @@ class GameController extends ChangeNotifier {
       case 'roomUpdate':
         state = msg['state'] as Map<String, dynamic>?;
         serverVersion = (msg['serverVersion'] ?? state?['serverVersion'])?.toString();
+        if (state != null) {
+          turnRemaining = (state!['turnRemaining'] as int?) ?? 0;
+          turnSeat = (state!['turnSeat'] as int?) ?? -1;
+          actionTimeout = (state!['actionTimeout'] as int?) ?? 60;
+        }
         _onRoomUpdate();
         break;
       case 'roomList':
@@ -133,6 +146,9 @@ class GameController extends ChangeNotifier {
         if (state != null && state!['log'] is List) {
           (state!['log'] as List).add(text);
         }
+        break;
+      case 'summary':
+        summary = msg;
         break;
       case 'dailyReport':
         dailyReport = msg;
@@ -164,11 +180,19 @@ class GameController extends ChangeNotifier {
       _appendHistory('第 $hn 手结束：$note');
       _lastResultNote = note;
     }
-    // 思考超时计时器：轮到我且未启动 -> 启动；不轮到我 -> 取消
-    if (myTurn) {
-      if (_expireTimer == null) _startTurnTimer();
+    // 行动倒计时（服务端权威）：显示当前行动者剩余秒，全桌可见。
+    // 每次状态刷新时以服务端下发的 turnRemaining 重置，本地每秒平滑递减。
+    if (turnRemaining > 0 && turnSeat >= 0) {
+      secondsLeft = turnRemaining;
+      timeoutWarning = secondsLeft <= 10;
+      if (_tickTimer == null) {
+        _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
+      }
     } else {
-      _cancelTimers();
+      secondsLeft = 0;
+      timeoutWarning = false;
+      _tickTimer?.cancel();
+      _tickTimer = null;
     }
   }
 
@@ -184,6 +208,7 @@ class GameController extends ChangeNotifier {
     int maxBuyIn = 3999,
     int buyInUnit = 1000,
     int aiCount = 0,
+    int actionTimeout = 60,
   }) {
     _send({
       'type': 'createRoom',
@@ -197,6 +222,7 @@ class GameController extends ChangeNotifier {
       'maxBuyIn': maxBuyIn,
       'buyInUnit': buyInUnit,
       'aiCount': aiCount,
+      'actionTimeout': actionTimeout,
     });
   }
 
@@ -316,45 +342,25 @@ class GameController extends ChangeNotifier {
     _cancelTimers();
     delayClicks = 0;
     timeoutWarning = false;
-    secondsLeft = 60;
-    _deadline = DateTime.now().add(const Duration(minutes: 1));
+    // 以服务端下发的剩余秒数为准（服务端权威惩罚，前端仅展示倒计时）
+    secondsLeft = turnRemaining > 0 ? turnRemaining : actionTimeout;
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
-    _warnTimer = Timer(const Duration(seconds: 50), () {
-      timeoutWarning = true;
-      notifyListeners();
-    });
-    _expireTimer = Timer(const Duration(minutes: 1), _onExpire);
   }
 
   void _onTick() {
-    final left = _deadline?.difference(DateTime.now()).inSeconds ?? 0;
-    secondsLeft = left > 0 ? left : 0;
+    secondsLeft = secondsLeft > 0 ? secondsLeft - 1 : 0;
     if (secondsLeft <= 10) timeoutWarning = true;
     notifyListeners();
   }
 
   void _onExpire() {
-    // 整段思考时间用尽仍未操作 -> 自动暂时离桌
-    _cancelTimers();
-    tempLeave();
-  }
-
-  /// 点击「延时 1 分钟」按钮：把本窗口延长 1 分钟（最多 2 次，共 3 分钟）
-  void requestDelay() {
-    if (delayClicks >= 2) return;
-    delayClicks++;
-    _cancelTimers();
-    timeoutWarning = false;
-    secondsLeft = 60;
-    _deadline = DateTime.now().add(const Duration(minutes: 1));
-    _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
-    _warnTimer = Timer(const Duration(seconds: 50), () {
-      timeoutWarning = true;
-      notifyListeners();
-    });
-    _expireTimer = Timer(const Duration(minutes: 1), _onExpire);
+    // 超时惩罚由服务端执行（check/fold + 暂时离桌），前端不再自动暂离
+    timeoutWarning = true;
     notifyListeners();
   }
+
+  /// 请求服务端返回个人结算（输赢/手牌数/游戏时间/思考时间）
+  void requestSummary() => _send({'type': 'requestSummary'});
 
   void _cancelTimers() {
     _tickTimer?.cancel();

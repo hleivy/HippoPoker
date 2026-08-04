@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../game_controller.dart';
+import '../config.dart';
 import '../models/card_model.dart';
 import '../widgets/poker_card.dart';
 import 'lobby_page.dart';
@@ -32,14 +33,79 @@ class _TablePageState extends State<TablePage> {
     'ended': '本手结束',
   };
 
-  void _leave() {
+  void _leave() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('退出房间？'),
+        content: const Text('确定要离开当前牌桌吗？离开后将结算你的输赢、手牌数、游戏时间与思考时间。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('确定离开'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
     _cancelAutoTimer();
+    // 请求服务端返回个人结算
+    _c.requestSummary();
+    await Future.delayed(const Duration(milliseconds: 500));
+    final s = _c.summary;
+    if (s != null && mounted) {
+      await showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: Text('本局结算（${s['name'] ?? ''}）'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('净输赢：${_fmt(s['winLoss'])}',
+                  style: TextStyle(
+                      color: ((s['winLoss'] as num? ?? 0) >= 0)
+                          ? Colors.green
+                          : Colors.red,
+                      fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text('参与手牌：${s['handsPlayed']} 手'),
+              Text('游戏时长：${_fmtDuration(s['gameSeconds'])}'),
+              Text('累计思考：${_fmtDuration(s['thinkSeconds'])}'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+    }
+    // 真正离开并回到大厅
     _c.leaveRoom();
     _c.dispose();
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => LobbyPage(controller: GameController())),
       (_) => false,
     );
+  }
+
+  String _fmt(dynamic v) {
+    final n = (v as num?)?.toInt() ?? 0;
+    return '${n >= 0 ? '+' : ''}$n';
+  }
+
+  String _fmtDuration(dynamic secs) {
+    final s = (secs as num?)?.toInt() ?? 0;
+    final m = s ~/ 60;
+    final r = s % 60;
+    return m > 0 ? '$m 分 $r 秒' : '$r 秒';
   }
 
   // 测试用：轮到我且未行动时，延迟一小段自动过牌/跟注，便于单人 vs AI 看完一手牌
@@ -311,6 +377,10 @@ class _TablePageState extends State<TablePage> {
     final roomName = _c.state?['roomName']?.toString() ?? '牌桌';
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _leave,
+        ),
         title: Text(roomName),
         actions: [
           // 暂停 / 继续：仅在本手未结束时显示；暂停后下一手不会自动开始
@@ -509,29 +579,33 @@ class _TablePageState extends State<TablePage> {
                 color: Colors.black38,
                 child: _buildStatusBar(state, me, players, inProgress),
               ),
-              // 思考超时警告（功能 4）
-              if (_c.timeoutWarning)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(8),
-                  color: Colors.red.shade800,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '即将自动暂时离桌（剩余 ${_c.secondsLeft}s）',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              // 行动倒计时（全桌可见）：显示当前行动者与剩余秒数
+              if (inProgress && _c.turnSeat >= 0)
+                Builder(builder: (ctx) {
+                  final actor = players.firstWhere(
+                    (p) => (p['seat'] as int? ?? -1) == _c.turnSeat,
+                    orElse: () => <String, dynamic>{},
+                  );
+                  final name = actor['name']?.toString() ?? '玩家';
+                  final isMe = actor['id'] == _c.playerId;
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    color: _c.timeoutWarning ? Colors.red.shade800 : Colors.blueGrey.shade800,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            isMe
+                                ? '轮到你行动（剩余 ${_c.secondsLeft}s）'
+                                : '等待 $name 行动（剩余 ${_c.secondsLeft}s）',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
                         ),
-                      ),
-                      if (_c.delayClicksLeft > 0)
-                        ElevatedButton(
-                          onPressed: _c.requestDelay,
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-                          child: Text('延时1分钟 (${_c.delayClicksLeft})'),
-                        ),
-                    ],
-                  ),
-                ),
+                      ],
+                    ),
+                  );
+                }),
               // 牌桌图形
               Expanded(child: tableArea),
               // 本手结果
@@ -589,6 +663,13 @@ class _TablePageState extends State<TablePage> {
                     ),
                   ),
                 ),
+              // 每页版本号
+              Center(
+                child: Text(
+                  '内部测试版 v$kAppVersion · 服务端 v${_c.serverVersion ?? '连接中…'}',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+              ),
               // 动作条
               if (myTurn)
                 Container(

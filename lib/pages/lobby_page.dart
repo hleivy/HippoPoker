@@ -30,6 +30,7 @@ class _LobbyPageState extends State<LobbyPage> {
   bool _navigated = false;
   bool _creating = false; // 是否处于“创建房间”表单
   int _aiCount = 0; // AI 对手数量（单人测试用）
+  final _actionTimeoutCtrl = TextEditingController(text: '60'); // 每轮行动时限(秒)
   Timer? _listTimer;
   final SettingsStorage _settings = SettingsStorage();
 
@@ -133,6 +134,7 @@ class _LobbyPageState extends State<LobbyPage> {
       maxBuyIn: maxBuyIn,
       buyInUnit: unit,
       aiCount: _aiCount,
+      actionTimeout: _i(_actionTimeoutCtrl, 60).clamp(5, 300),
     );
   }
 
@@ -276,6 +278,8 @@ class _LobbyPageState extends State<LobbyPage> {
                   }),
                 ),
                 if (_hasAnte) _numField('前注金额', _anteCtrl),
+                const SizedBox(height: 8),
+                _numField('每轮行动时间(秒)', _actionTimeoutCtrl),
                 const SizedBox(height: 12),
                 // AI 对手设置
                 const Text('AI 对手数量（单人测试发牌打牌流程用）',
