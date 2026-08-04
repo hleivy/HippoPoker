@@ -41,8 +41,8 @@ jobs:
       - name: Publish web to public release (no-auth download)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: web-${{ github.sha }}
-          name: web-${{ github.sha }}
+          tag_name: latest-web
+          name: latest-web
           files: web_release.zip
           prerelease: false
         env:

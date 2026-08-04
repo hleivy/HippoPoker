@@ -30,9 +30,6 @@ class _LobbyPageState extends State<LobbyPage> {
   bool _navigated = false;
   bool _creating = false; // 是否处于“创建房间”表单
   int _aiCount = 0; // AI 对手数量（单人测试用）
-  final _actionTimeoutCtrl = TextEditingController(text: '60'); // 每轮行动时限(秒)
-  final _extCountCtrl = TextEditingController(text: '2'); // 每轮可申请的延长次数
-  final _extSecondsCtrl = TextEditingController(text: '60'); // 每次延长时间(秒)
   Timer? _listTimer;
   final SettingsStorage _settings = SettingsStorage();
 
@@ -68,15 +65,6 @@ class _LobbyPageState extends State<LobbyPage> {
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => TablePage(controller: _c)),
       );
-    }
-    if (_c.lastCreatedRoomId != null && mounted) {
-      final id = _c.lastCreatedRoomId!;
-      _c.lastCreatedRoomId = null;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('房间创建成功：$id，可在大厅加入'), duration: const Duration(seconds: 3)),
-      );
-      // 创建成功后返回大厅列表，方便用户选择进入或继续创建
-      setState(() => _creating = false);
     }
     if (_c.errorMsg != null && mounted) {
       final msg = _c.errorMsg!;
@@ -145,9 +133,6 @@ class _LobbyPageState extends State<LobbyPage> {
       maxBuyIn: maxBuyIn,
       buyInUnit: unit,
       aiCount: _aiCount,
-      actionTimeout: _i(_actionTimeoutCtrl, 60).clamp(5, 300),
-      extensionCount: _i(_extCountCtrl, 2).clamp(0, 20),
-      extensionSeconds: _i(_extSecondsCtrl, 60).clamp(0, 300),
     );
   }
 
@@ -220,26 +205,15 @@ class _LobbyPageState extends State<LobbyPage> {
     );
   }
 
-  // 连接未就绪时的轻提示（按钮仍可点，动作会排队，连上后自动执行）
+  // 连接未就绪时的提示（按钮仍可点，动作会排队，连上后自动执行）
   Widget _connHint() {
     if (_c.connected) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            _c.isConnecting ? '连接中…' : '未连接',
-            style: const TextStyle(color: Colors.white70, fontSize: 13),
-            textAlign: TextAlign.center,
-          ),
-        ],
+      child: Text(
+        _c.isConnecting ? '正在连接服务器，操作将在连接后自动执行…' : '未连接到服务器',
+        style: const TextStyle(color: Colors.white70),
+        textAlign: TextAlign.center,
       ),
     );
   }
@@ -302,14 +276,6 @@ class _LobbyPageState extends State<LobbyPage> {
                   }),
                 ),
                 if (_hasAnte) _numField('前注金额', _anteCtrl),
-                const SizedBox(height: 8),
-                _numField('每轮行动时间(秒)', _actionTimeoutCtrl),
-                const SizedBox(height: 8),
-                Row(children: [
-                  _numField('每轮延长次数', _extCountCtrl),
-                  const SizedBox(width: 8),
-                  _numField('每次延长时间(秒)', _extSecondsCtrl),
-                ]),
                 const SizedBox(height: 12),
                 // AI 对手设置
                 const Text('AI 对手数量（单人测试发牌打牌流程用）',
@@ -338,7 +304,7 @@ class _LobbyPageState extends State<LobbyPage> {
                 const SizedBox(height: 8),
                 ElevatedButton(
                   onPressed: _create,
-                  child: const Text('创建房间'),
+                  child: const Text('创建并进入房间'),
                 ),
                 _connHint(),
               ],
