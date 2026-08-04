@@ -22,19 +22,6 @@ class _TablePageState extends State<TablePage> {
   bool _reportShown = false;
   bool _autoCall = false; // 测试用：轮到我时自动过牌/跟注
   Timer? _autoTimer;
-  Timer? _bubbleTimer; // 行动气泡淡出定时器（每 400ms 刷新一次）
-
-  // 是否存在“近期行动”，用于决定是否保持气泡定时器运行
-  bool _hasFreshActions(List<Map<String, dynamic>> players) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    for (final p in players) {
-      final la = p['lastAction'];
-      if (la is Map && (la['at'] as int? ?? 0) > 0) {
-        if (now - (la['at'] as int) < 4200) return true;
-      }
-    }
-    return false;
-  }
 
   static const _stageLabels = {
     'waiting': '等待开始',
@@ -138,24 +125,8 @@ class _TablePageState extends State<TablePage> {
   }
 
   @override
-  void initState() {
-    super.initState();
-    // 行动气泡淡出：定期触发重建，仅在有近期行动时运行
-    _bubbleTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
-      if (!mounted) return;
-      final st = _c.state;
-      if (st == null) return;
-      final players = (st['players'] as List? ?? [])
-          .map((p) => p as Map<String, dynamic>)
-          .toList();
-      if (_hasFreshActions(players)) setState(() {});
-    });
-  }
-
-  @override
   void dispose() {
     _cancelAutoTimer();
-    _bubbleTimer?.cancel();
     super.dispose();
   }
 
@@ -200,89 +171,42 @@ class _TablePageState extends State<TablePage> {
     }
   }
 
-  // 单条手牌历史记录（含赢家与思考时间统计）
-  Widget _buildHistoryRecord(Map<String, dynamic> h) {
-    final handNo = (h['handNumber'] as int?) ?? 0;
-    final pot = (h['pot'] as int?) ?? 0;
-    final winners = (h['winners'] as List?) ?? [];
-    final log = (h['actionThinkLog'] as List?) ?? [];
-    // 按玩家聚合思考时间（ms）
-    final Map<String, int> thinkByName = {};
-    for (final e in log) {
-      if (e is! Map) continue;
-      final name = (e['name']?.toString()) ?? '?';
-      final ms = (e['thinkMs'] as int?) ?? 0;
-      thinkByName[name] = (thinkByName[name] ?? 0) + ms;
-    }
-    final thinkSorted = thinkByName.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final winText = winners.isNotEmpty
-        ? winners
-            .map((w) {
-              final m = w as Map<String, dynamic>;
-              return '${m['name']} +${m['amount']}';
-            })
-            .join('，')
-        : '无（弃牌/未结算）';
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.black45,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.green.shade900, width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('第 $handNo 手 · 底池 $pot',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-          const SizedBox(height: 3),
-          Text('赢家：$winText', style: const TextStyle(fontSize: 12, color: Colors.amber)),
-          if (thinkSorted.isNotEmpty)
-            Text(
-              '思考：${thinkSorted.map((e) => '${e.key} ${(e.value / 1000).toStringAsFixed(1)}s').join('，')}',
-              style: const TextStyle(fontSize: 12, color: Colors.white70),
-            ),
-        ],
-      ),
-    );
-  }
-
   // 历史手牌：牌桌页内弹框，不打断正常打牌（功能 7，不切页）
   void _showHistoryDialog() {
-    final serverHist = _c.handHistory.whereType<Map<String, dynamic>>().toList();
+    final serverHist = _c.handHistory;
     showDialog(
       context: context,
       builder: (dctx) => AlertDialog(
         title: const Text('历史手牌'),
         content: SizedBox(
           width: double.maxFinite,
-          height: 380,
+          height: 360,
           child: FutureBuilder<List<String>>(
             future: _c.readHistory(),
             builder: (_, snap) {
               final local = snap.data ?? [];
-              if (serverHist.isEmpty && local.isEmpty) {
+              final items = <String>[];
+              for (final h in serverHist) {
+                if (h is Map) {
+                  final line = h['line']?.toString() ?? h.toString();
+                  if (line.isNotEmpty) items.add(line);
+                } else if (h != null) {
+                  items.add(h.toString());
+                }
+              }
+              items.addAll(local);
+              if (items.isEmpty) {
                 return const Center(
                   child: Text('暂无历史手牌记录', style: TextStyle(color: Colors.white70)),
                 );
               }
-              final records = serverHist.reversed.toList();
               return ListView(
-                children: [
-                  ...records.map(_buildHistoryRecord),
-                  if (local.isNotEmpty) ...[
-                    const Divider(color: Colors.white30),
-                    const Text('本机操作日志', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                    ...local.reversed.map(
-                      (e) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Text(e, style: const TextStyle(fontSize: 12, color: Colors.white60)),
-                      ),
-                    ),
-                  ],
-                ],
+                children: items.reversed
+                    .map((e) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: Text(e, style: const TextStyle(fontSize: 13)),
+                        ))
+                    .toList(),
               );
             },
           ),
@@ -459,11 +383,11 @@ class _TablePageState extends State<TablePage> {
         ),
         title: Text(roomName),
         actions: [
-          // 暂停 / 取消暂停：请求“本手结束后暂停发牌”（由底部“继续下一手”恢复）
+          // 暂停 / 继续：仅在本手未结束时显示；暂停后下一手不会自动开始
           if (_c.state?['handInProgress'] != true)
             TextButton(
               onPressed: _c.isPaused ? _c.resumeAfterHand : _c.pauseAfterHand,
-              child: Text(_c.isPaused ? '取消暂停' : '本手后暂停',
+              child: Text(_c.isPaused ? '继续发牌' : '本手后暂停',
                   style: TextStyle(color: _c.isPaused ? Colors.amber : Colors.white)),
             ),
           TextButton(
@@ -530,9 +454,7 @@ class _TablePageState extends State<TablePage> {
                 child: Text('底池  $pot',
                     style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               ),
-              const SizedBox(height: 6),
-              _buildChipStack(pot, size: 18),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(5, (i) {
@@ -540,7 +462,7 @@ class _TablePageState extends State<TablePage> {
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: i < community.length
                         ? PokerCardView(card: community[i], width: 50, height: 70)
-                        : CardBack(width: 50, height: 70),
+                        : PokerCardView(card: null, width: 50, height: 70),
                   );
                 }),
               ),
@@ -584,11 +506,7 @@ class _TablePageState extends State<TablePage> {
                   height: ry * 2,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(ry), // 椭圆（胶囊形，经典牌桌轮廓）
-                    gradient: const RadialGradient(
-                      colors: [Color(0xFF1B7A4B), Color(0xFF0B3D27)], // 中心亮、边缘暗的绿绒台面
-                      center: Alignment.center,
-                      radius: 0.75,
-                    ),
+                    color: const Color(0xFF0E5C3A),
                     border: Border.all(color: const Color(0x6B8E23), width: 4),
                     boxShadow: const [
                       BoxShadow(color: Colors.black38, blurRadius: 10, spreadRadius: 2)
@@ -652,11 +570,8 @@ class _TablePageState extends State<TablePage> {
             },
           );
 
-          return Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: 1000),
-              child: Column(
-                children: [
+          return Column(
+            children: [
               // 状态条：自动发牌提示 / 暂停提示 / 倒计时
               Container(
                 width: double.infinity,
@@ -687,48 +602,10 @@ class _TablePageState extends State<TablePage> {
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                           ),
                         ),
-                        if (isMe && _c.myExtLeft > 0)
-                          TextButton.icon(
-                            onPressed: _c.requestExtension,
-                            icon: const Icon(Icons.hourglass_bottom, size: 16),
-                            label: Text('申请延长(${_c.myExtLeft})'),
-                            style: TextButton.styleFrom(
-                                foregroundColor: Colors.white,
-                                backgroundColor: Colors.blueGrey.shade600),
-                          ),
                       ],
                     ),
                   );
                 }),
-              // 暂停发牌后：醒目的“继续下一手”按钮
-              if (_c.handPaused)
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.shade900,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.amber, width: 1.5),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.pause_circle_filled, color: Colors.white),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text('已暂停发牌，等待继续',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      ),
-                      ElevatedButton.icon(
-                        onPressed: _c.resumeNextHand,
-                        icon: const Icon(Icons.play_arrow),
-                        label: const Text('继续下一手'),
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.amber, foregroundColor: Colors.black),
-                      ),
-                    ],
-                  ),
-                ),
               // 牌桌图形
               Expanded(child: tableArea),
               // 本手结果
@@ -847,114 +724,10 @@ class _TablePageState extends State<TablePage> {
                   ),
                 ),
             ],
-          ),
-        ),
-      );
+          );
         },
       ),
     );
-  }
-
-  // 行动文字气泡：根据 lastAction 生成“弃牌/过牌/跟注/加注”提示（带淡出）
-  Widget? _buildActionBubble(Map<String, dynamic> p) {
-    final la = p['lastAction'];
-    if (la is! Map) return null;
-    final at = (la['at'] as int? ?? 0);
-    if (at <= 0) return null;
-    final age = DateTime.now().millisecondsSinceEpoch - at;
-    if (age < 0 || age > 4200) return null;
-    final action = (la['action'] as String?) ?? '';
-    final amount = (la['amount'] as int?) ?? 0;
-    final timeout = la['timeout'] == true;
-    late String text;
-    late Color color;
-    switch (action) {
-      case 'fold':
-        text = '弃牌';
-        color = Colors.red;
-        break;
-      case 'check':
-        text = '过牌';
-        color = Colors.blueGrey;
-        break;
-      case 'call':
-        text = '跟注 $amount';
-        color = Colors.lightGreen;
-        break;
-      case 'raise':
-        text = '加注到 $amount';
-        color = Colors.orange;
-        break;
-      default:
-        return null;
-    }
-    if (timeout) text = '⏱ $text';
-    final opacity = (1 - age / 4200).clamp(0.0, 1.0);
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 200),
-      opacity: opacity,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.92),
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: const [
-            BoxShadow(color: Colors.black45, blurRadius: 3, offset: Offset(0, 1))
-          ],
-        ),
-        child: Text(text,
-            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-      ),
-    );
-  }
-
-  // 筹码堆积图标：纵向堆叠的圆盘表示筹码量级（1~maxDiscs 个），右侧显示数值
-  Widget _buildChipStack(int chips, {double size = 16, int maxDiscs = 8}) {
-    final discColors = [
-      const Color(0xFFE53935),
-      const Color(0xFF1E88E5),
-      const Color(0xFF43A047),
-      const Color(0xFFFB8C00),
-      const Color(0xFF8E24AA),
-    ];
-    final tier = chips <= 0 ? 0 : (log(chips) / ln10 * 2).clamp(1, maxDiscs).ceil();
-    final discs = <Widget>[];
-    for (int i = 0; i < tier; i++) {
-      discs.add(Positioned(
-        bottom: i * (size * 0.30),
-        child: Container(
-          width: size,
-          height: size * 0.42,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: discColors[i % discColors.length],
-            border: Border.all(color: Colors.white70, width: 1.2),
-          ),
-          child: Center(child: Container(width: size * 0.5, height: 2, color: Colors.white54)),
-        ),
-      ));
-    }
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        SizedBox(
-          width: size,
-          height: tier > 0 ? size * 0.42 + (tier - 1) * (size * 0.30) + 2 : size * 0.42,
-          child: Stack(children: discs),
-        ),
-        const SizedBox(width: 6),
-        Text(_fmtChips(chips),
-            style: const TextStyle(fontSize: 13, color: Colors.white, fontWeight: FontWeight.bold)),
-      ],
-    );
-  }
-
-  String _fmtChips(int chips) {
-    if (chips >= 10000) {
-      return '${(chips / 1000).toStringAsFixed(chips % 1000 == 0 ? 0 : 1)}k';
-    }
-    return chips.toString();
   }
 
   // 单个座位卡片（围绕牌桌显示）
@@ -976,95 +749,75 @@ class _TablePageState extends State<TablePage> {
           padding: const EdgeInsets.symmetric(horizontal: 2),
           child: i < cards.length
               ? PokerCardView(card: cards[i], width: 40, height: 56)
-              : CardBack(width: 40, height: 56),
+              : PokerCardView(card: null, width: 40, height: 56),
         );
       }),
     );
 
-    final bubble = _buildActionBubble(p);
-
-    return Stack(
-      clipBehavior: Clip.none,
-      alignment: Alignment.topCenter,
-      children: [
-        Container(
-          width: 156,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          decoration: BoxDecoration(
-            color: tempLeft || sittingOut
-                ? Colors.black38
-                : (isTurn ? Colors.green.shade800 : Colors.black54),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isTurn ? Colors.amber : (isDealer ? Colors.amber.shade200 : Colors.green.shade900),
-              width: isTurn ? 3 : 2,
-            ),
-            // 当前行动者高亮发光
-            boxShadow: isTurn
-                ? [BoxShadow(color: Colors.amber.withValues(alpha: 0.7), blurRadius: 16, spreadRadius: 2)]
-                : null,
-          ),
-          child: Opacity(
-            opacity: folded ? 0.45 : (tempLeft || sittingOut ? 0.55 : 1),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+    return Container(
+      width: 156,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: tempLeft || sittingOut
+            ? Colors.black38
+            : (isTurn ? Colors.green.shade800 : Colors.black54),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isTurn ? Colors.amber : (isDealer ? Colors.amber.shade200 : Colors.green.shade900),
+          width: isTurn ? 3 : 2,
+        ),
+      ),
+      child: Opacity(
+        opacity: folded ? 0.45 : (tempLeft || sittingOut ? 0.55 : 1),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (isDealer)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Text('D', style: TextStyle(fontSize: 11, color: Colors.black, fontWeight: FontWeight.bold)),
-                      ),
-                    if (pos.isNotEmpty)
-                      Container(
-                        margin: const EdgeInsets.only(left: 4),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: pos == 'BTN' ? Colors.amber : Colors.blueGrey,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(pos, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      ),
-                    if (isSelf)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 5),
-                        child: Text('我', style: TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold)),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 3),
-                Text(name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-                // 筹码堆积图标（替代纯数字显示）
-                _buildChipStack(chips),
-                const SizedBox(height: 4),
-                cardRow,
-                if (tempLeft || sittingOut)
-                  const Text('暂时离桌', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                if (allIn)
-                  const Text('ALL IN', style: TextStyle(fontSize: 13, color: Colors.red, fontWeight: FontWeight.bold)),
-                if (folded)
-                  const Text('弃牌', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                if (isDealer)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Text('D', style: TextStyle(fontSize: 11, color: Colors.black, fontWeight: FontWeight.bold)),
+                  ),
+                if (pos.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(left: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: pos == 'BTN' ? Colors.amber : Colors.blueGrey,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(pos, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+                if (isSelf)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 5),
+                    child: Text('我', style: TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold)),
+                  ),
               ],
             ),
-          ),
+            const SizedBox(height: 3),
+            Text(name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+            Text('筹码 $chips', style: const TextStyle(fontSize: 13, color: Colors.white70)),
+            const SizedBox(height: 4),
+            cardRow,
+            if (tempLeft || sittingOut)
+              const Text('暂时离桌', style: TextStyle(fontSize: 12, color: Colors.white54)),
+            if (allIn)
+              const Text('ALL IN', style: TextStyle(fontSize: 13, color: Colors.red, fontWeight: FontWeight.bold)),
+            if (folded)
+              const Text('弃牌', style: TextStyle(fontSize: 12, color: Colors.white54)),
+          ],
         ),
-        if (bubble != null)
-          Positioned(
-            top: -16,
-            left: 0,
-            right: 0,
-            child: Center(child: bubble),
-          ),
-      ],
+      ),
     );
   }
 }
