@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -43,3 +46,16 @@ jobs:
           name: poker-app-release
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
+      - name: Package APK for public download
+        run: cp build/app/outputs/flutter-apk/app-release.apk HippoPoker.apk
+
+      - name: Publish APK to public release (no-auth download)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.sha }}
+          name: apk-${{ github.sha }}
+          files: HippoPoker.apk
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

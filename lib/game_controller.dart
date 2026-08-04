@@ -36,11 +36,17 @@ class GameController extends ChangeNotifier {
   Map<String, dynamic>? state;
   List<dynamic> roomList = [];
   String? serverVersion; // 服务端版本号（roomUpdate/roomList 下发）
+  String? lastCreatedRoomId; // 最近一次创建的房间 id（创建后不再自动进入）
 
   // ---- 当前行动者倒计时（服务端权威下发，全桌可见）----
   int turnRemaining = 0; // 当前行动者剩余行动秒数
   int turnSeat = -1; // 当前轮到的座位
   int actionTimeout = 60; // 房间设定的每轮行动时限(秒)
+
+  // ---- 暂停 / 延长 ----
+  bool handPaused = false; // 本手结束后暂停发牌，等待“继续下一手”
+  int extensionCount = 2; // 每轮可申请的延长次数
+  int extensionSeconds = 60; // 每次延长时间(秒)
 
   // ---- 退出结算 ----
   Map<String, dynamic>? summary; // requestSummary 返回的个人统计
@@ -119,6 +125,9 @@ class GameController extends ChangeNotifier {
   void _onMessage(dynamic data) {
     final msg = jsonDecode(data as String) as Map<String, dynamic>;
     switch (msg['type']) {
+      case 'created':
+        lastCreatedRoomId = msg['roomId']?.toString();
+        break;
       case 'joined':
         playerId = msg['playerId'] as String?;
         roomId = msg['roomId'] as String?;
@@ -131,6 +140,9 @@ class GameController extends ChangeNotifier {
           turnRemaining = (state!['turnRemaining'] as int?) ?? 0;
           turnSeat = (state!['turnSeat'] as int?) ?? -1;
           actionTimeout = (state!['actionTimeout'] as int?) ?? 60;
+          handPaused = (state!['handPaused'] as bool?) ?? false;
+          extensionCount = (state!['extensionCount'] as int?) ?? 2;
+          extensionSeconds = (state!['extensionSeconds'] as int?) ?? 60;
         }
         _onRoomUpdate();
         break;
@@ -209,6 +221,8 @@ class GameController extends ChangeNotifier {
     int buyInUnit = 1000,
     int aiCount = 0,
     int actionTimeout = 60,
+    int extensionCount = 2,
+    int extensionSeconds = 60,
   }) {
     _send({
       'type': 'createRoom',
@@ -223,6 +237,8 @@ class GameController extends ChangeNotifier {
       'buyInUnit': buyInUnit,
       'aiCount': aiCount,
       'actionTimeout': actionTimeout,
+      'extensionCount': extensionCount,
+      'extensionSeconds': extensionSeconds,
     });
   }
 
@@ -262,6 +278,18 @@ class GameController extends ChangeNotifier {
   void pauseAfterHand() => _send({'type': 'pauseAfterHand', 'paused': true});
   void resumeAfterHand() => _send({'type': 'pauseAfterHand', 'paused': false});
 
+  /// 继续下一手：清除暂停标记并让服务端开始发牌
+  void resumeNextHand() => _send({'type': 'resumeNextHand'});
+
+  /// 申请延长当前回合的思考时间（消耗一次延长次数）
+  void requestExtension() => _send({'type': 'requestExtension'});
+
+  /// 房主修改房间参数
+  void updateRoom(Map<String, dynamic> params) => _send({'type': 'updateRoom', ...params});
+
+  /// 房主删除房间
+  void deleteRoom() => _send({'type': 'deleteRoom'});
+
   void clearError() {
     errorMsg = null;
     notifyListeners();
@@ -291,6 +319,12 @@ class GameController extends ChangeNotifier {
     return m != null && m['isTurn'] == true;
   }
 
+  // 我当前剩余的延长次数
+  int get myExtLeft {
+    final m = me;
+    return (m?['extLeft'] as int?) ?? 0;
+  }
+
   int get callNeed {
     final m = me;
     if (m == null) return 0;
@@ -311,6 +345,12 @@ class GameController extends ChangeNotifier {
 
   // 庄家 id
   String get dealerId => (state?['dealerId'] as String?) ?? '';
+
+  // 房主 id
+  String get hostId => (state?['hostId'] as String?) ?? '';
+
+  // 当前用户是否为房主
+  bool get amIHost => playerId != null && hostId == playerId;
 
   // 已请求“本手结束后暂停”的玩家 id 列表
   List<String> get pausedIds {

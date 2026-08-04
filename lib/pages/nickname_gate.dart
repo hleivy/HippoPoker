@@ -16,6 +16,7 @@ class _NicknameGateState extends State<NicknameGate> {
   final TextEditingController _ctrl = TextEditingController();
   bool _ready = false;
   bool _loading = true;
+  GameController? _preparedController;
 
   @override
   void initState() {
@@ -28,6 +29,11 @@ class _NicknameGateState extends State<NicknameGate> {
     final n = await _settings.loadNickname();
     if (mounted) {
       if (n != null && n.trim().isNotEmpty) {
+        // 昵称已设置：提前创建并连接 GameController，进大厅时直接复用，减少“连接中”等待
+        final c = GameController();
+        c.connect();
+        c.listRooms();
+        _preparedController = c;
         setState(() {
           _ready = true;
           _loading = false;
@@ -42,7 +48,14 @@ class _NicknameGateState extends State<NicknameGate> {
     final n = _ctrl.text.trim();
     if (n.isEmpty) return;
     await _settings.saveNickname(n);
-    if (mounted) setState(() => _ready = true);
+    if (mounted) {
+      // 首次设置昵称时也提前启动连接
+      final c = GameController();
+      c.connect();
+      c.listRooms();
+      _preparedController = c;
+      setState(() => _ready = true);
+    }
   }
 
   @override
@@ -57,7 +70,7 @@ class _NicknameGateState extends State<NicknameGate> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (_ready) {
-      return LobbyPage(controller: GameController());
+      return LobbyPage(controller: _preparedController ?? GameController());
     }
     return Scaffold(
       body: Center(
@@ -67,8 +80,8 @@ class _NicknameGateState extends State<NicknameGate> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: Image.asset('assets/images/app_icon.png', width: 96, height: 96),
+                borderRadius: BorderRadius.circular(28),
+                child: Image.asset('assets/images/app_icon.png', width: 220, height: 220),
               ),
               const SizedBox(height: 20),
               const Text('欢迎来到河马扑克',
