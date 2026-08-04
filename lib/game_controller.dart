@@ -42,6 +42,11 @@ class GameController extends ChangeNotifier {
   int turnSeat = -1; // 当前轮到的座位
   int actionTimeout = 60; // 房间设定的每轮行动时限(秒)
 
+  // ---- 暂停 / 延长 ----
+  bool handPaused = false; // 本手结束后暂停发牌，等待“继续下一手”
+  int extensionCount = 2; // 每轮可申请的延长次数
+  int extensionSeconds = 60; // 每次延长时间(秒)
+
   // ---- 退出结算 ----
   Map<String, dynamic>? summary; // requestSummary 返回的个人统计
 
@@ -131,6 +136,9 @@ class GameController extends ChangeNotifier {
           turnRemaining = (state!['turnRemaining'] as int?) ?? 0;
           turnSeat = (state!['turnSeat'] as int?) ?? -1;
           actionTimeout = (state!['actionTimeout'] as int?) ?? 60;
+          handPaused = (state!['handPaused'] as bool?) ?? false;
+          extensionCount = (state!['extensionCount'] as int?) ?? 2;
+          extensionSeconds = (state!['extensionSeconds'] as int?) ?? 60;
         }
         _onRoomUpdate();
         break;
@@ -209,6 +217,8 @@ class GameController extends ChangeNotifier {
     int buyInUnit = 1000,
     int aiCount = 0,
     int actionTimeout = 60,
+    int extensionCount = 2,
+    int extensionSeconds = 60,
   }) {
     _send({
       'type': 'createRoom',
@@ -223,6 +233,8 @@ class GameController extends ChangeNotifier {
       'buyInUnit': buyInUnit,
       'aiCount': aiCount,
       'actionTimeout': actionTimeout,
+      'extensionCount': extensionCount,
+      'extensionSeconds': extensionSeconds,
     });
   }
 
@@ -262,6 +274,12 @@ class GameController extends ChangeNotifier {
   void pauseAfterHand() => _send({'type': 'pauseAfterHand', 'paused': true});
   void resumeAfterHand() => _send({'type': 'pauseAfterHand', 'paused': false});
 
+  /// 继续下一手：清除暂停标记并让服务端开始发牌
+  void resumeNextHand() => _send({'type': 'resumeNextHand'});
+
+  /// 申请延长当前回合的思考时间（消耗一次延长次数）
+  void requestExtension() => _send({'type': 'requestExtension'});
+
   void clearError() {
     errorMsg = null;
     notifyListeners();
@@ -289,6 +307,12 @@ class GameController extends ChangeNotifier {
   bool get myTurn {
     final m = me;
     return m != null && m['isTurn'] == true;
+  }
+
+  // 我当前剩余的延长次数
+  int get myExtLeft {
+    final m = me;
+    return (m?['extLeft'] as int?) ?? 0;
   }
 
   int get callNeed {
