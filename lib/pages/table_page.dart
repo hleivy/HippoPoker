@@ -621,8 +621,9 @@ class _TablePageState extends State<TablePage> {
         for (final p in players) {
           final seat = (p['seat'] as int?) ?? 0;
           final rel = n > 0 ? (((seat - mySeat) % n) + n) % n : 0;
+          // 位置标注与“顺时针行动”对齐：庄家顺时针下家（座位号递减方向）为 SB。
           final pos = _posLabel(dealerSeat >= 0 && n > 0
-              ? (((seat - dealerSeat) % n) + n) % n
+              ? (((dealerSeat - seat) % n) + n) % n
               : -1, n);
           final isDealer = p['id'] == _c.dealerId;
           final isSelf = p['id'] == _c.playerId;
@@ -1326,6 +1327,18 @@ class _TablePageState extends State<TablePage> {
                         _buildActionBar(myTurn, callNeed, minTarget, maxTarget, target, canRaise, currentBet, pot),
                     ],
                   ),
+                  // 未发牌时提示，避免进入房间后“像死机”
+                  if (!inProgress)
+                    const Center(
+                      child: Card(
+                        color: Colors.black54,
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text('等待发牌…（AI 准备中）',
+                              style: TextStyle(color: Colors.white, fontSize: 16)),
+                        ),
+                      ),
+                    ),
                   // 版本号：左下角，避开我的手牌条/操作条
                   Positioned(
                     left: 8,

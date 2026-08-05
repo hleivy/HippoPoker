@@ -148,10 +148,8 @@ class GameController extends ChangeNotifier {
     switch (msg['type']) {
       case 'created':
         lastCreatedRoomId = msg['roomId']?.toString();
-        // 创建者已自动加入房间，同步 roomId/playerId 以便大厅可直接设置房间
-        roomId = msg['roomId']?.toString();
-        playerId = msg['playerId']?.toString();
-        isHost = msg['host'] == true;
+        // 创建房间后不自动入座：大厅显示“加入”，用户主动点加入才真正入座。
+        // 故此处不设置 roomId/playerId（server 也未把创建者加入房间）。
         break;
       case 'joined':
         playerId = msg['playerId'] as String?;
