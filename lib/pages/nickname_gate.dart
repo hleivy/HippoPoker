@@ -84,7 +84,7 @@ class _NicknameGateState extends State<NicknameGate> {
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(36),
-                child: Image.asset('assets/images/app_icon.png', width: 320, height: 320),
+                child: Image.asset('images/app_icon.png', width: 320, height: 320),
               ),
               const SizedBox(height: 20),
               const Text('欢迎来到河马扑克',

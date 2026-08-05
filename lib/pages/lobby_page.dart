@@ -334,7 +334,7 @@ class _LobbyPageState extends State<LobbyPage> {
             Center(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(28),
-                child: Image.asset('assets/images/app_icon.png', width: 160, height: 160),
+                child: Image.asset('images/app_icon.png', width: 160, height: 160),
               ),
             ),
             const SizedBox(height: 12),
@@ -372,7 +372,7 @@ class _LobbyPageState extends State<LobbyPage> {
             Center(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(28),
-                child: Image.asset('assets/images/app_icon.png', width: 160, height: 160),
+                child: Image.asset('images/app_icon.png', width: 160, height: 160),
               ),
             ),
             const SizedBox(height: 10),

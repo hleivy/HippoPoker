@@ -8,7 +8,7 @@ SRC = Path(r'C:/Users/hleiv/.workbuddy/clipboard-images/clipboard-2026-08-03T13-
 
 TARGETS = {
     # Flutter assets
-    'assets/images/app_icon.png': 512,
+    'images/app_icon.png': 512,
     # Web
     'web/favicon.png': 128,
     'web/icons/Icon-192.png': 192,
