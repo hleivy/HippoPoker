@@ -24,6 +24,7 @@ class _TablePageState extends State<TablePage> {
   bool _autoCall = false;
   Timer? _autoTimer;
   Timer? _bubbleTimer;
+  Timer? _leaveSafetyTimer; // 离场保险：超时未收到 left 信号则强制返回大厅
 
   static const _stageLabels = {
     'waiting': '等待开始',
@@ -56,6 +57,7 @@ class _TablePageState extends State<TablePage> {
   void dispose() {
     _cancelAutoTimer();
     _bubbleTimer?.cancel();
+    _leaveSafetyTimer?.cancel();
     super.dispose();
   }
 
@@ -111,37 +113,20 @@ class _TablePageState extends State<TablePage> {
     );
     if (confirm != true) return;
     _cancelAutoTimer();
-    _c.requestSummary();
-    await Future.delayed(const Duration(milliseconds: 500));
-    final s = _c.summary;
-    if (s != null && mounted) {
-      await showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text('本局结算（${s['name'] ?? ''}）'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('净输赢：${_fmt(s['winLoss'])}',
-                  style: TextStyle(
-                      color: ((s['winLoss'] as num? ?? 0) >= 0) ? Colors.green : Colors.red,
-                      fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              Text('参与手牌：${s['handsPlayed']} 手'),
-              Text('游戏时长：${_fmtDuration(s['gameSeconds'])}'),
-              Text('累计思考：${_fmtDuration(s['thinkSeconds'])}'),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('确定')),
-          ],
-        ),
-      );
-    }
+    // 不再单独弹"本局结算"对话框——离场统计（总买入/剩余/净输赢）统一由服务端下发的
+    // playerSummary/dailyReport 在一个弹窗里展示，避免关闭后还弹第二个界面。
     _c.leaveRoom();
-    // 不再立即返回大厅：等待服务端下发离场统计（playerSummary/dailyReport）与 left 信号，
-    // 由 build 的 state==null 分支展示战绩后再自动返回，避免报告弹窗被过早销毁。
+    // 保险：若 3 秒内未收到服务端 left 信号（网络/服务端异常），强制本地清理并返回大厅，
+    // 避免一直卡在"正在离开房间"。
+    _leaveSafetyTimer?.cancel();
+    _leaveSafetyTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && _c.roomId != null) {
+        _c.roomId = null;
+        _c.playerId = null;
+        _c.state = null;
+        if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+      }
+    });
   }
 
   void _maybeShowReport({bool onClosePop = false}) {
@@ -177,6 +162,7 @@ class _TablePageState extends State<TablePage> {
             actions: [
               TextButton(
                 onPressed: () {
+                  _leaveSafetyTimer?.cancel();
                   Navigator.of(context).pop(); // 关闭弹窗
                   if (onClosePop && mounted) Navigator.of(context).pop(); // 返回大厅
                 },
@@ -341,7 +327,7 @@ class _TablePageState extends State<TablePage> {
 
   // ---- 座位：纵向卡片，头像/名字/筹码/手牌依次向下，避免重叠 ----
   Widget _buildSeat(Map<String, dynamic> p, bool isSelf, String pos, bool isDealer,
-      {bool hideCards = false}) {
+      {bool hideCards = false, bool isWinner = false}) {
     final name = (p['name']?.toString() ?? '玩家');
     final chips = (p['chips'] as int?) ?? 0;
     final folded = p['folded'] == true;
@@ -414,16 +400,36 @@ class _TablePageState extends State<TablePage> {
                   child: Container(
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      border: isTurn
-                          ? Border.all(color: Colors.amber, width: 3)
-                          : Border.all(color: Colors.white24, width: 1.5),
-                      boxShadow: isTurn
-                          ? [BoxShadow(color: Colors.amber.withOpacity(0.55), blurRadius: 12, spreadRadius: 1)]
-                          : null,
+                      border: isWinner
+                          ? Border.all(color: Colors.greenAccent, width: 4)
+                          : isTurn
+                              ? Border.all(color: Colors.amber, width: 3)
+                              : Border.all(color: Colors.white24, width: 1.5),
+                      boxShadow: isWinner
+                          ? [BoxShadow(color: Colors.greenAccent.withOpacity(0.7), blurRadius: 16, spreadRadius: 2)]
+                          : isTurn
+                              ? [BoxShadow(color: Colors.amber.withOpacity(0.55), blurRadius: 12, spreadRadius: 1)]
+                              : null,
                     ),
                     child: _buildAvatar(name, radius: 30),
                   ),
                 ),
+                // 胜者徽章：摊牌结束时给赢家一个明确的绿色高亮
+                if (isWinner)
+                  Positioned(
+                    top: -6,
+                    left: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.greenAccent,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 3)],
+                      ),
+                      child: const Text('WIN',
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black)),
+                    ),
+                  ),
                 // 位置徽章（UTG/SB/BB/D 等）
                 if (pos.isNotEmpty)
                   Positioned(
@@ -525,6 +531,21 @@ class _TablePageState extends State<TablePage> {
     final pot = state['pot'] as int? ?? 0;
     final community = _parseCards(state['community']);
     final lastResult = state['lastResult'] as Map<String, dynamic>?;
+    // 摊牌/结束时解析赢家 id，用于座位高亮（胜负明确展示）
+    final Set<String> winnerIds = {};
+    if (!inProgress && lastResult != null) {
+      final pots = lastResult['pots'];
+      if (pots is List) {
+        for (final potEntry in pots) {
+          if (potEntry is Map && potEntry['winners'] is List) {
+            for (final w in potEntry['winners']) {
+              if (w is Map && w['id'] != null) winnerIds.add(w['id'].toString());
+            }
+          }
+        }
+      }
+      // 兼容 note 型（fold 提前结束）无 pots 的情况：无赢家高亮
+    }
 
     return LayoutBuilder(
       builder: (lctx, cons) {
@@ -669,7 +690,8 @@ class _TablePageState extends State<TablePage> {
             top: posOffset.dy,
             child: Transform.translate(
               offset: const Offset(-64, -75),
-              child: _buildSeat(p, isSelf, pos, isDealer, hideCards: false),
+              child: _buildSeat(p, isSelf, pos, isDealer,
+                  hideCards: false, isWinner: !inProgress && winnerIds.contains(p['id']?.toString())),
             ),
           ));
         }
@@ -1260,13 +1282,24 @@ class _TablePageState extends State<TablePage> {
           final state = _c.state;
           if (_autoCall && _c.myTurn) _scheduleAutoCall(); else _cancelAutoTimer();
           if (state == null) {
+            if (_c.roomId != null) {
+              // 刚进入牌桌，roomUpdate 尚未到达：显示进入中等待，不要误判为"已离开"弹回大厅
+              return const Center(child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(color: Colors.amber),
+                  SizedBox(height: 12),
+                  Text('正在进入房间…', style: TextStyle(color: Colors.white70)),
+                ],
+              ));
+            }
             // 已离开房间：优先展示离场统计（总买入/剩余/净输赢），关闭后返回大厅；无报告则直接返回
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
               if (_c.dailyReport != null && !_reportShown) {
                 _maybeShowReport(onClosePop: true);
               } else if (_c.dailyReport == null) {
-                Navigator.of(context).pop();
+                if (Navigator.of(context).canPop()) Navigator.of(context).pop();
               }
             });
             return const Center(child: Text('正在离开房间…'));

@@ -176,6 +176,7 @@ class _LobbyPageState extends State<LobbyPage> {
     final min = (room['minBuyIn'] as int?) ?? 1000;
     final max = (room['maxBuyIn'] as int?) ?? 3999;
     final unit = (room['buyInUnit'] as int?) ?? 1000;
+    final hasPwd = room['hasPassword'] == true;
     final opts = <int>[];
     int v = min;
     while (v <= max) {
@@ -184,20 +185,41 @@ class _LobbyPageState extends State<LobbyPage> {
     }
     if (opts.isEmpty) opts.add(min);
     int sel = opts.first;
+    final pwdCtrl = TextEditingController();
     showDialog(
       context: context,
       builder: (dctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
           title: Text('加入 ${room['name'] ?? '房间'}'),
-          content: DropdownButton<int>(
-            value: sel,
-            isExpanded: true,
-            items: opts
-                .map((o) => DropdownMenuItem(value: o, child: Text('初始买入：$o')))
-                .toList(),
-            onChanged: (val) {
-              if (val != null) setSt(() => sel = val);
-            },
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButton<int>(
+                value: sel,
+                isExpanded: true,
+                items: opts
+                    .map((o) => DropdownMenuItem(value: o, child: Text('初始买入：$o')))
+                    .toList(),
+                onChanged: (val) {
+                  if (val != null) setSt(() => sel = val);
+                },
+              ),
+              // 带密码的房间：必须输入密码才能加入（密码由服务端校验）
+              if (hasPwd)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: TextField(
+                    controller: pwdCtrl,
+                    autofocus: true,
+                    obscureText: true,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '房间密码',
+                      hintText: '请输入房间密码',
+                    ),
+                  ),
+                ),
+            ],
           ),
           actions: [
             TextButton(
@@ -211,7 +233,7 @@ class _LobbyPageState extends State<LobbyPage> {
                     (_c.nickname ?? '').trim().isEmpty ? '玩家' : _c.nickname!.trim();
                 _saveNickname();
                 _c.joinRoom(room['id']?.toString() ?? '', nick, sel,
-                    password: _pwdCtrl.text.trim());
+                    password: hasPwd ? pwdCtrl.text.trim() : '');
               },
               child: const Text('加入'),
             ),
@@ -230,6 +252,7 @@ class _LobbyPageState extends State<LobbyPage> {
         title: const Text('房间管理'),
         content: TextField(
           controller: ctrl,
+          autofocus: true,
           obscureText: true,
           keyboardType: TextInputType.number,
           decoration: const InputDecoration(labelText: '管理密码', hintText: '请输入管理密码'),
@@ -250,44 +273,50 @@ class _LobbyPageState extends State<LobbyPage> {
     if (!mounted) return;
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('房间管理'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView(
-            shrinkWrap: true,
-            children: _c.roomList.map((r) {
-              final room = r as Map<String, dynamic>;
-              return ListTile(
-                title: Text(room['name'] ?? '房间'),
-                subtitle: Text('${room['players']}人 · 盲注 ${room['smallBlind']}/${room['bigBlind']}'),
-                trailing: TextButton(
-                  onPressed: () async {
-                    final confirm = await showDialog<bool>(
-                      context: ctx,
-                      builder: (_) => AlertDialog(
-                        title: const Text('删除房间'),
-                        content: Text('确定删除「${room['name'] ?? '房间'}」吗？'),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.of(_).pop(false), child: const Text('取消')),
-                          TextButton(onPressed: () => Navigator.of(_).pop(true), child: const Text('删除', style: TextStyle(color: Colors.red))),
-                        ],
-                      ),
-                    );
-                    if (confirm == true) {
-                      _c.adminDeleteRoom(room['id']?.toString() ?? '', pw);
-                      Navigator.of(ctx).pop();
-                    }
-                  },
-                  child: const Text('删除', style: TextStyle(color: Colors.red)),
-                ),
-              );
-            }).toList(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: const Text('房间管理'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: _c.roomList.map((r) {
+                final room = r as Map<String, dynamic>;
+                return ListTile(
+                  title: Text(room['name'] ?? '房间'),
+                  subtitle: Text('${room['players']}人 · 盲注 ${room['smallBlind']}/${room['bigBlind']}'),
+                  trailing: TextButton(
+                    onPressed: () async {
+                      final confirm = await showDialog<bool>(
+                        context: ctx,
+                        builder: (_) => AlertDialog(
+                          title: const Text('删除房间'),
+                          content: Text('确定删除「${room['name'] ?? '房间'}」吗？'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.of(_).pop(false), child: const Text('取消')),
+                            TextButton(onPressed: () => Navigator.of(_).pop(true), child: const Text('删除', style: TextStyle(color: Colors.red))),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) {
+                        // 删除成功后停留在房间管理页面（刷新列表），不关闭整个管理弹窗
+                        _c.adminDeleteRoom(room['id']?.toString() ?? '', pw);
+                        _c.listRooms();
+                        Future.delayed(const Duration(milliseconds: 400), () {
+                          if (mounted) setSt(() {});
+                        });
+                      }
+                    },
+                    child: const Text('删除', style: TextStyle(color: Colors.red)),
+                  ),
+                );
+              }).toList(),
+            ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('关闭')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('关闭')),
-        ],
       ),
     );
   }
