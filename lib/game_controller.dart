@@ -188,12 +188,16 @@ class GameController extends ChangeNotifier {
       case 'dailyReport':
         dailyReport = msg;
         break;
+      case 'playerSummary':
+        // 离场时服务端给本人发的个人战绩，结构与 dailyReport 一致，复用同一弹窗
+        dailyReport = msg;
+        break;
       case 'left':
         roomId = null;
         playerId = null;
         isHost = false;
         state = null;
-        dailyReport = null;
+        // 注意：不清空 dailyReport，离场统计需在返回大厅前展示
         _cancelTimers();
         break;
     }

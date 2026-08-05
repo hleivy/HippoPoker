@@ -38,6 +38,7 @@ class _TablePageState extends State<TablePage> {
   @override
   void initState() {
     super.initState();
+    _reportShown = false; // 每次进入牌桌重置，确保离场报告可再次弹出
     // 进入牌桌立即向服务端请求一次最新状态，避免停留在“等待房间状态”
     if (_c.roomId != null) _c.sync();
     _bubbleTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
@@ -139,20 +140,23 @@ class _TablePageState extends State<TablePage> {
       );
     }
     _c.leaveRoom();
-    // 返回到位于栈底、与此牌桌共用同一 GameController 的大厅，避免重建连接导致“连接中”与状态丢失
-    if (mounted) Navigator.of(context).pop();
+    // 不再立即返回大厅：等待服务端下发离场统计（playerSummary/dailyReport）与 left 信号，
+    // 由 build 的 state==null 分支展示战绩后再自动返回，避免报告弹窗被过早销毁。
   }
 
-  void _maybeShowReport() {
+  void _maybeShowReport({bool onClosePop = false}) {
     if (_c.dailyReport != null && !_reportShown && mounted) {
       _reportShown = true;
       final report = _c.dailyReport!;
       final players = (report['players'] as List?) ?? [];
+      final title = (report['title'] as String?) ?? '当日输赢报告（${report['date'] ?? ''}）';
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
         showDialog(
           context: context,
+          barrierDismissible: false,
           builder: (_) => AlertDialog(
-            title: Text('当日输赢报告（${report['date'] ?? ''}）'),
+            title: Text(title),
             content: SizedBox(
               width: double.maxFinite,
               child: ListView(
@@ -160,17 +164,24 @@ class _TablePageState extends State<TablePage> {
                 children: players.map((p) {
                   final m = p as Map<String, dynamic>;
                   final wl = (m['winLoss'] as num?)?.toInt() ?? 0;
+                  final remain = ((m['chips'] as num?)?.toInt() ?? 0) + ((m['cashedOut'] as num?)?.toInt() ?? 0);
                   return ListTile(
                     title: Text(m['name']?.toString() ?? '玩家'),
-                    subtitle: Text('总买入 ${m['totalBuyIn']} · 已赎回 ${m['cashedOut']} · 当前 ${m['chips']}'),
-                    trailing: Text('${wl >= 0 ? '+' : ''}$wl',
+                    subtitle: Text('总买入 ${m['totalBuyIn']} · 剩余 ${remain}'),
+                    trailing: Text('净输赢 ${wl >= 0 ? '+' : ''}$wl',
                         style: TextStyle(color: wl >= 0 ? Colors.green : Colors.red, fontWeight: FontWeight.bold)),
                   );
                 }).toList(),
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('关闭')),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop(); // 关闭弹窗
+                  if (onClosePop && mounted) Navigator.of(context).pop(); // 返回大厅
+                },
+                child: const Text('关闭'),
+              ),
             ],
           ),
         );
@@ -1248,7 +1259,18 @@ class _TablePageState extends State<TablePage> {
           try {
           final state = _c.state;
           if (_autoCall && _c.myTurn) _scheduleAutoCall(); else _cancelAutoTimer();
-          if (state == null) return const Center(child: Text('等待房间状态…'));
+          if (state == null) {
+            // 已离开房间：优先展示离场统计（总买入/剩余/净输赢），关闭后返回大厅；无报告则直接返回
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              if (_c.dailyReport != null && !_reportShown) {
+                _maybeShowReport(onClosePop: true);
+              } else if (_c.dailyReport == null) {
+                Navigator.of(context).pop();
+              }
+            });
+            return const Center(child: Text('正在离开房间…'));
+          }
 
           final inProgress = state['handInProgress'] == true;
           final players = (state['players'] as List? ?? [])
