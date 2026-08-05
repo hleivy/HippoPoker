@@ -18,21 +18,10 @@ class LobbyPage extends StatefulWidget {
 class _LobbyPageState extends State<LobbyPage> {
   late final GameController _c = widget.controller;
   final _nameCtrl = TextEditingController();
-  final _roomNameCtrl = TextEditingController();
   final _pwdCtrl = TextEditingController();
-  final _sbCtrl = TextEditingController(text: '10');
-  final _bbCtrl = TextEditingController(text: '20');
-  final _minBuyInCtrl = TextEditingController(text: '1000');
-  final _maxBuyInCtrl = TextEditingController(text: '3999');
-  final _buyInUnitCtrl = TextEditingController(text: '1000');
-  final _anteCtrl = TextEditingController(text: '0');
-  bool _hasAnte = false;
   bool _navigated = false;
   bool _creating = false; // 是否处于“创建房间”表单
-  int _aiCount = 0; // AI 对手数量（单人测试用）
-  final _actionTimeoutCtrl = TextEditingController(text: '60'); // 每轮行动时限(秒)
-  final _extCountCtrl = TextEditingController(text: '2'); // 每轮可申请的延长次数
-  final _extSecondsCtrl = TextEditingController(text: '60'); // 每次延长时间(秒)
+  bool _editingNick = false; // 大厅昵称是否处于编辑态（默认只读，点“编辑”才可改）
   Timer? _listTimer;
   final SettingsStorage _settings = SettingsStorage();
 
@@ -90,9 +79,6 @@ class _LobbyPageState extends State<LobbyPage> {
     }
   }
 
-  int _i(TextEditingController c, int dflt) =>
-      int.tryParse(c.text.trim()) ?? dflt;
-
   // 生成唯一房间名（创建表单留空时自动兜底，避免误用固定默认名）
   String _genRoomName() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -102,178 +88,85 @@ class _LobbyPageState extends State<LobbyPage> {
   }
 
   void _startCreate() {
-    _roomNameCtrl.clear(); // 留空，提示用户自行命名
     setState(() => _creating = true);
   }
 
-  void _create() {
-    final sb = _i(_sbCtrl, 10);
-    final bb = _i(_bbCtrl, sb * 2);
-    final ante = _hasAnte ? (_i(_anteCtrl, sb).clamp(1, 999999)) : 0;
-    final minBuyIn = _i(_minBuyInCtrl, 1000);
-    final maxBuyIn = _i(_maxBuyInCtrl, 3999);
-    final unit = _i(_buyInUnitCtrl, 1000).clamp(1, 999999);
-    final nick = _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim();
-    final roomName = _roomNameCtrl.text.trim().isEmpty ? _genRoomName() : _roomNameCtrl.text.trim();
+  // 用统一房间表单的结果创建房间（名称留空时自动生成唯一名）
+  void _doCreate(_RoomFormResult res) {
     _saveNickname();
+    final nick = (_c.nickname ?? '').trim().isEmpty ? '玩家' : _c.nickname!.trim();
+    final roomName = res.name.trim().isEmpty ? _genRoomName() : res.name.trim();
     _c.createRoom(
       roomName: roomName,
       name: nick,
-      buyIn: minBuyIn,
-      sb: sb,
-      bb: bb,
-      ante: ante,
-      minBuyIn: minBuyIn,
-      maxBuyIn: maxBuyIn,
-      buyInUnit: unit,
-      aiCount: _aiCount,
-      actionTimeout: _i(_actionTimeoutCtrl, 60).clamp(5, 300),
-      extensionCount: _i(_extCountCtrl, 2).clamp(0, 20),
-      extensionSeconds: _i(_extSecondsCtrl, 60).clamp(0, 300),
-    );
-  }
-
-  // 公共参数组件：创建与设置共用，保持风格一致、避免冗余
-  Widget _buildParamFields({
-    required TextEditingController sb,
-    required TextEditingController bb,
-    required TextEditingController min,
-    required TextEditingController max,
-    required TextEditingController unit,
-    required TextEditingController to,
-    required TextEditingController ec,
-    required TextEditingController es,
-    required TextEditingController ante,
-    required bool hasAnte,
-    required void Function(bool) onAnteChanged,
-    bool enabled = true,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Text('牌桌参数', style: TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        Row(children: [
-          _numField('小盲', sb, enabled: enabled),
-          const SizedBox(width: 8),
-          _numField('大盲', bb, enabled: enabled),
-        ]),
-        const SizedBox(height: 8),
-        Row(children: [
-          _numField('买入下限', min, enabled: enabled),
-          const SizedBox(width: 8),
-          _numField('买入上限', max, enabled: enabled),
-        ]),
-        const SizedBox(height: 8),
-        Row(children: [
-          _numField('买入最小单位', unit, enabled: enabled),
-        ]),
-        const SizedBox(height: 8),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('是否有前注 (ante)'),
-          subtitle: const Text('开启后默认等于小盲', style: TextStyle(fontSize: 12, color: Colors.white54)),
-          value: hasAnte,
-          onChanged: enabled ? onAnteChanged : null,
-        ),
-        if (hasAnte) _numField('前注金额', ante, enabled: enabled),
-        const SizedBox(height: 8),
-        _numField('每轮行动时间(秒)', to, enabled: enabled),
-        const SizedBox(height: 8),
-        Row(children: [
-          _numField('每轮延长次数', ec, enabled: enabled),
-          const SizedBox(width: 8),
-          _numField('每次延长时间(秒)', es, enabled: enabled),
-        ]),
-      ],
+      buyIn: res.min,
+      sb: res.sb,
+      bb: res.bb,
+      ante: res.hasAnte ? res.ante.clamp(1, 999999) : 0,
+      minBuyIn: res.min,
+      maxBuyIn: res.max,
+      buyInUnit: res.unit.clamp(1, 999999),
+      aiCount: res.aiCount,
+      actionTimeout: res.actionTimeout.clamp(5, 300),
+      extensionCount: res.extensionCount.clamp(0, 20),
+      extensionSeconds: res.extensionSeconds.clamp(0, 300),
     );
   }
 
   // 在大厅直接设置房间参数（持久房间：不必进入房间即可管理）
   // [adminPassword] 非空时使用管理员通道（无需是该房间房主）
+  // 与“创建房间”共用同一个 _RoomForm，保证参数项与 AI 选项始终一致。
   void _showRoomSettingsDialog(Map<String, dynamic> room, {String? adminPassword}) {
-    final nameCtrl = TextEditingController(text: '${room['name'] ?? ''}');
-    final sbCtrl = TextEditingController(text: '${(room['smallBlind'] as int?) ?? 10}');
-    final bbCtrl = TextEditingController(text: '${(room['bigBlind'] as int?) ?? 20}');
-    final minCtrl = TextEditingController(text: '${(room['minBuyIn'] as int?) ?? 1000}');
-    final maxCtrl = TextEditingController(text: '${(room['maxBuyIn'] as int?) ?? 3999}');
-    final unitCtrl = TextEditingController(text: '${(room['buyInUnit'] as int?) ?? 1000}');
-    final toCtrl = TextEditingController(text: '${(room['actionTimeout'] as int?) ?? 60}');
-    final ecCtrl = TextEditingController(text: '${(room['extensionCount'] as int?) ?? 2}');
-    final esCtrl = TextEditingController(text: '${(room['extensionSeconds'] as int?) ?? 60}');
-    final anteVal = (room['ante'] as int?) ?? 0;
-    final anteCtrl = TextEditingController(text: '$anteVal');
-    bool anteOn = anteVal > 0;
-    String err = '';
-    int _i(TextEditingController c, int d) => int.tryParse(c.text.trim()) ?? d;
-
+    final seed = _RoomFormSeed(
+      name: '${room['name'] ?? ''}',
+      sb: (room['smallBlind'] as int?) ?? 10,
+      bb: (room['bigBlind'] as int?) ?? 20,
+      min: (room['minBuyIn'] as int?) ?? 1000,
+      max: (room['maxBuyIn'] as int?) ?? 3999,
+      unit: (room['buyInUnit'] as int?) ?? 1000,
+      ante: (room['ante'] as int?) ?? 0,
+      actionTimeout: (room['actionTimeout'] as int?) ?? 60,
+      extensionCount: (room['extensionCount'] as int?) ?? 2,
+      extensionSeconds: (room['extensionSeconds'] as int?) ?? 60,
+      aiCount: (room['aiCount'] as int?) ?? (room['botCount'] as int?) ?? 0,
+    );
     showDialog(
       context: context,
-      builder: (dctx) => StatefulBuilder(
-        builder: (ctx, setSt) => AlertDialog(
-          title: const Text('房间设置'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: '房间名称', hintText: '给房间起个名字'),
-                ),
-                const SizedBox(height: 8),
-                _buildParamFields(
-                  sb: sbCtrl,
-                  bb: bbCtrl,
-                  min: minCtrl,
-                  max: maxCtrl,
-                  unit: unitCtrl,
-                  to: toCtrl,
-                  ec: ecCtrl,
-                  es: esCtrl,
-                  ante: anteCtrl,
-                  hasAnte: anteOn,
-                  onAnteChanged: (v) => setSt(() {
-                    anteOn = v;
-                    // 开启前注时，若当前值为空或 0，默认填入小盲
-                    if (v && (anteCtrl.text.trim().isEmpty || anteCtrl.text.trim() == '0')) {
-                      anteCtrl.text = sbCtrl.text.trim().isEmpty ? '10' : sbCtrl.text.trim();
-                    }
-                  }),
-                ),
-                if (err.isNotEmpty)
-                  Padding(padding: const EdgeInsets.only(top: 6), child: Text(err, style: const TextStyle(color: Colors.red))),
-              ],
-            ),
+      builder: (dctx) => AlertDialog(
+        title: const Text('房间设置'),
+        content: SingleChildScrollView(
+          child: _RoomForm(
+            seed: seed,
+            submitLabel: '保存',
+            showAiNote: false,
+            onSubmit: (res) {
+              final params = <String, dynamic>{
+                'roomId': room['id']?.toString() ?? '',
+                'name': res.name.trim().isEmpty ? room['name'] : res.name.trim(),
+                'smallBlind': res.sb,
+                'bigBlind': res.bb,
+                'minBuyIn': res.min,
+                'maxBuyIn': res.max,
+                'buyInUnit': res.unit,
+                'ante': res.hasAnte ? res.ante.clamp(1, 999999) : 0,
+                'actionTimeout': res.actionTimeout.clamp(5, 300),
+                'extensionCount': res.extensionCount.clamp(0, 20),
+                'extensionSeconds': res.extensionSeconds.clamp(0, 300),
+                'aiCount': res.aiCount,
+              };
+              if (adminPassword != null && adminPassword.isNotEmpty) {
+                _c.adminUpdateRoom({...params, 'password': adminPassword});
+              } else {
+                _c.updateRoom(params);
+              }
+              Navigator.of(dctx).pop();
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('房间设置已保存')));
+            },
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
-            TextButton(
-              onPressed: () {
-                final params = <String, dynamic>{
-                  'roomId': room['id']?.toString() ?? '',
-                  'name': nameCtrl.text.trim().isEmpty ? room['name'] : nameCtrl.text.trim(),
-                  'smallBlind': _i(sbCtrl, 10),
-                  'bigBlind': _i(bbCtrl, 20),
-                  'minBuyIn': _i(minCtrl, 1000),
-                  'maxBuyIn': _i(maxCtrl, 3999),
-                  'buyInUnit': _i(unitCtrl, 1000),
-                  'ante': anteOn ? _i(anteCtrl, 0).clamp(1, 999999) : 0,
-                  'actionTimeout': _i(toCtrl, 60).clamp(5, 300),
-                  'extensionCount': _i(ecCtrl, 2).clamp(0, 20),
-                  'extensionSeconds': _i(esCtrl, 60).clamp(0, 300),
-                };
-                if (adminPassword != null && adminPassword.isNotEmpty) {
-                  _c.adminUpdateRoom({...params, 'password': adminPassword});
-                } else {
-                  _c.updateRoom(params);
-                }
-                Navigator.of(ctx).pop();
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('房间设置已保存')));
-              },
-              child: const Text('保存'),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dctx).pop(), child: const Text('取消')),
+        ],
       ),
     );
   }
@@ -315,7 +208,7 @@ class _LobbyPageState extends State<LobbyPage> {
               onPressed: () {
                 Navigator.of(dctx).pop();
                 final nick =
-                    _nameCtrl.text.trim().isEmpty ? '玩家' : _nameCtrl.text.trim();
+                    (_c.nickname ?? '').trim().isEmpty ? '玩家' : _c.nickname!.trim();
                 _saveNickname();
                 _c.joinRoom(room['id']?.toString() ?? '', nick, sel,
                     password: _pwdCtrl.text.trim());
@@ -328,10 +221,10 @@ class _LobbyPageState extends State<LobbyPage> {
     );
   }
 
-  // 管理密码校验（当前固定 1507）
-  Future<bool> _verifyAdminPassword() async {
+  // 管理密码输入（密码不应在界面上以任何形式预设/显示，交由服务端校验）
+  Future<String?> _verifyAdminPassword() async {
     final ctrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final res = await showDialog<String?>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('房间管理'),
@@ -339,24 +232,21 @@ class _LobbyPageState extends State<LobbyPage> {
           controller: ctrl,
           obscureText: true,
           keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: '管理密码', hintText: '1507'),
+          decoration: const InputDecoration(labelText: '管理密码', hintText: '请输入管理密码'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim() == '1507'), child: const Text('确定')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), child: const Text('确定')),
         ],
       ),
     );
-    return ok == true;
+    return res;
   }
 
-  // 房间管理：输入密码后可删除任意房间
+  // 房间管理：输入密码后可删除任意房间（密码由服务端校验）
   void _showRoomManagementDialog() async {
-    final ok = await _verifyAdminPassword();
-    if (!ok) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('密码错误')));
-      return;
-    }
+    final pw = await _verifyAdminPassword();
+    if (pw == null) return; // 取消
     if (!mounted) return;
     showDialog(
       context: context,
@@ -385,7 +275,7 @@ class _LobbyPageState extends State<LobbyPage> {
                       ),
                     );
                     if (confirm == true) {
-                      _c.adminDeleteRoom(room['id']?.toString() ?? '', '1507');
+                      _c.adminDeleteRoom(room['id']?.toString() ?? '', pw);
                       Navigator.of(ctx).pop();
                     }
                   },
@@ -405,20 +295,8 @@ class _LobbyPageState extends State<LobbyPage> {
   @override
   void dispose() {
     _listTimer?.cancel();
-    _roomNameCtrl.dispose();
     _c.removeListener(_onChange);
     super.dispose();
-  }
-
-  Widget _numField(String label, TextEditingController ctrl, {bool enabled = true}) {
-    return Expanded(
-      child: TextField(
-        controller: ctrl,
-        enabled: enabled,
-        keyboardType: TextInputType.number,
-        decoration: InputDecoration(labelText: label),
-      ),
-    );
   }
 
   // 连接未就绪时的轻提示（按钮仍可点，动作会排队，连上后自动执行）
@@ -445,7 +323,7 @@ class _LobbyPageState extends State<LobbyPage> {
     );
   }
 
-  // 创建房间表单（含 AI 对手设置）
+  // 创建房间表单：与“房间设置”共用同一个 _RoomForm，保证参数项与 AI 选项完全一致
   Widget _buildCreateForm() {
     return Center(
       child: ConstrainedBox(
@@ -453,86 +331,25 @@ class _LobbyPageState extends State<LobbyPage> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-                         Center(
+            Center(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(28),
                 child: Image.asset('assets/images/app_icon.png', width: 160, height: 160),
               ),
             ),
             const SizedBox(height: 12),
-            TextField(
-                controller: _roomNameCtrl,
-                decoration: const InputDecoration(
-                    labelText: '房间名称', hintText: '留空将自动生成唯一名称')),
-            const SizedBox(height: 12),
-            TextField(
-                controller: _nameCtrl,
-                decoration: const InputDecoration(
-                    labelText: '你的昵称', hintText: '留空将记住上次使用的昵称')),
-            const SizedBox(height: 12),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildParamFields(
-                      sb: _sbCtrl,
-                      bb: _bbCtrl,
-                      min: _minBuyInCtrl,
-                      max: _maxBuyInCtrl,
-                      unit: _buyInUnitCtrl,
-                      to: _actionTimeoutCtrl,
-                      ec: _extCountCtrl,
-                      es: _extSecondsCtrl,
-                      ante: _anteCtrl,
-                      hasAnte: _hasAnte,
-                      onAnteChanged: (v) => setState(() {
-                        _hasAnte = v;
-                        if (v && (_anteCtrl.text.trim().isEmpty || _anteCtrl.text.trim() == '0')) {
-                          final sb = _sbCtrl.text.trim();
-                          _anteCtrl.text = sb.isEmpty ? '10' : sb;
-                        }
-                      }),
-                    ),
-                    const SizedBox(height: 12),
-                    // AI 对手设置（单人测试用，不影响真实对局）
-                    const Text('AI 对手数量（单人测试发牌打牌流程用）',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 6),
-                    DropdownButton<int>(
-                      value: _aiCount,
-                      isExpanded: true,
-                      items: List.generate(9, (i) => DropdownMenuItem(
-                        value: i,
-                        child: Text(i == 0 ? '无（真人局）' : '$i 个 AI 牌手'),
-                      )),
-                      onChanged: (v) => setState(() => _aiCount = v ?? 0),
-                    ),
-                    const SizedBox(height: 8),
-                    ElevatedButton(
-                      onPressed: _create,
-                      child: const Text('创建房间'),
-                    ),
-                    _connHint(),
-                  ],
+                child: _RoomForm(
+                  seed: const _RoomFormSeed(),
+                  submitLabel: '创建房间',
+                  showAiNote: true,
+                  footer: _connHint(),
+                  onSubmit: (res) => _doCreate(res),
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            if (_aiCount > 0)
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.blueGrey.shade800,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'AI 牌手由服务端自动坐入并发牌/下注，便于单人完整测试一手牌。'
-                  '若创建后看不到 AI，说明服务端尚未部署含 AI 的版本（需上传新版 server-deploy.zip）。',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ),
           ],
         ),
       ),
@@ -559,10 +376,46 @@ class _LobbyPageState extends State<LobbyPage> {
               ),
             ),
             const SizedBox(height: 10),
-            TextField(
-                controller: _nameCtrl,
-                decoration: const InputDecoration(
-                    labelText: '你的昵称', hintText: '留空将记住上次使用的昵称')),
+            // 昵称：默认只读，点击“编辑”才进入可改状态（避免误触修改）
+            Row(
+              children: [
+                Expanded(
+                  child: _editingNick
+                      ? TextField(
+                          controller: _nameCtrl,
+                          decoration: const InputDecoration(
+                              labelText: '你的昵称', hintText: '留空将记住上次使用的昵称'),
+                        )
+                      : Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.white24),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            _nameCtrl.text.trim().isEmpty ? '未设置昵称（将使用“玩家”）' : _nameCtrl.text.trim(),
+                            style: const TextStyle(fontSize: 16, color: Colors.white),
+                          ),
+                        ),
+                ),
+                const SizedBox(width: 8),
+                if (_editingNick) ...[
+                  TextButton(onPressed: () {
+                    _saveNickname();
+                    setState(() => _editingNick = false);
+                  }, child: const Text('保存')),
+                  TextButton(onPressed: () {
+                    _loadNickname(); // 放弃修改，恢复已保存昵称
+                    setState(() => _editingNick = false);
+                  }, child: const Text('取消')),
+                ] else
+                  TextButton.icon(
+                    onPressed: () => setState(() => _editingNick = true),
+                    icon: const Icon(Icons.edit, size: 18),
+                    label: const Text('编辑'),
+                  ),
+              ],
+            ),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -632,9 +485,8 @@ class _LobbyPageState extends State<LobbyPage> {
                       children: [
                         TextButton(
                           onPressed: () async {
-                            final ok = await _verifyAdminPassword();
-                            if (ok && mounted) _showRoomSettingsDialog(room, adminPassword: '1507');
-                            else if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('密码错误')));
+                            final pw = await _verifyAdminPassword();
+                            if (pw != null && mounted) _showRoomSettingsDialog(room, adminPassword: pw);
                           },
                           child: const Text('设置'),
                         ),
@@ -688,6 +540,250 @@ class _LobbyPageState extends State<LobbyPage> {
         animation: _c,
         builder: (ctx, _) => _creating ? _buildCreateForm() : _buildLobby(),
       ),
+    );
+  }
+}
+
+// ---- 统一的房间参数表单（创建房间 / 房间设置 共用同一段代码、同一个页面组件） ----
+// 这样以后调整房间参数（含 AI 对手数量）时，创建与设置始终保持一致，不会再次出现两边不一致的问题。
+
+class _RoomFormSeed {
+  final String name;
+  final int sb;
+  final int bb;
+  final int min;
+  final int max;
+  final int unit;
+  final int ante;
+  final int actionTimeout;
+  final int extensionCount;
+  final int extensionSeconds;
+  final int aiCount;
+  const _RoomFormSeed({
+    this.name = '',
+    this.sb = 10,
+    this.bb = 20,
+    this.min = 1000,
+    this.max = 3999,
+    this.unit = 1000,
+    this.ante = 0,
+    this.actionTimeout = 60,
+    this.extensionCount = 2,
+    this.extensionSeconds = 60,
+    this.aiCount = 0,
+  });
+}
+
+class _RoomFormResult {
+  final String name;
+  final int sb;
+  final int bb;
+  final int min;
+  final int max;
+  final int unit;
+  final int ante;
+  final bool hasAnte;
+  final int actionTimeout;
+  final int extensionCount;
+  final int extensionSeconds;
+  final int aiCount;
+  const _RoomFormResult({
+    required this.name,
+    required this.sb,
+    required this.bb,
+    required this.min,
+    required this.max,
+    required this.unit,
+    required this.ante,
+    required this.hasAnte,
+    required this.actionTimeout,
+    required this.extensionCount,
+    required this.extensionSeconds,
+    required this.aiCount,
+  });
+}
+
+class _RoomForm extends StatefulWidget {
+  final _RoomFormSeed seed;
+  final String submitLabel;
+  final bool showAiNote;
+  final Widget? footer;
+  final void Function(_RoomFormResult) onSubmit;
+  const _RoomForm({
+    super.key,
+    required this.seed,
+    required this.submitLabel,
+    this.showAiNote = true,
+    this.footer,
+    required this.onSubmit,
+  });
+
+  @override
+  State<_RoomForm> createState() => _RoomFormState();
+}
+
+class _RoomFormState extends State<_RoomForm> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _sbCtrl;
+  late final TextEditingController _bbCtrl;
+  late final TextEditingController _minCtrl;
+  late final TextEditingController _maxCtrl;
+  late final TextEditingController _unitCtrl;
+  late final TextEditingController _anteCtrl;
+  late final TextEditingController _toCtrl;
+  late final TextEditingController _ecCtrl;
+  late final TextEditingController _esCtrl;
+  late bool _hasAnte;
+  late int _aiCount;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = widget.seed;
+    _nameCtrl = TextEditingController(text: s.name);
+    _sbCtrl = TextEditingController(text: '${s.sb}');
+    _bbCtrl = TextEditingController(text: '${s.bb}');
+    _minCtrl = TextEditingController(text: '${s.min}');
+    _maxCtrl = TextEditingController(text: '${s.max}');
+    _unitCtrl = TextEditingController(text: '${s.unit}');
+    _anteCtrl = TextEditingController(text: '${s.ante}');
+    _toCtrl = TextEditingController(text: '${s.actionTimeout}');
+    _ecCtrl = TextEditingController(text: '${s.extensionCount}');
+    _esCtrl = TextEditingController(text: '${s.extensionSeconds}');
+    _hasAnte = s.ante > 0;
+    _aiCount = s.aiCount;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _sbCtrl.dispose();
+    _bbCtrl.dispose();
+    _minCtrl.dispose();
+    _maxCtrl.dispose();
+    _unitCtrl.dispose();
+    _anteCtrl.dispose();
+    _toCtrl.dispose();
+    _ecCtrl.dispose();
+    _esCtrl.dispose();
+    super.dispose();
+  }
+
+  int _i(TextEditingController c, int dflt) =>
+      int.tryParse(c.text.trim()) ?? dflt;
+
+  Widget _numField(String label, TextEditingController ctrl) {
+    return Expanded(
+      child: TextField(
+        controller: ctrl,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(labelText: label),
+      ),
+    );
+  }
+
+  void _submit() {
+    final sb = _i(_sbCtrl, 10);
+    final bb = _i(_bbCtrl, sb * 2);
+    widget.onSubmit(_RoomFormResult(
+      name: _nameCtrl.text.trim(),
+      sb: sb,
+      bb: bb,
+      min: _i(_minCtrl, 1000),
+      max: _i(_maxCtrl, 3999),
+      unit: _i(_unitCtrl, 1000),
+      ante: _i(_anteCtrl, 0),
+      hasAnte: _hasAnte,
+      actionTimeout: _i(_toCtrl, 60),
+      extensionCount: _i(_ecCtrl, 2),
+      extensionSeconds: _i(_esCtrl, 60),
+      aiCount: _aiCount,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _nameCtrl,
+          decoration: const InputDecoration(labelText: '房间名称', hintText: '给房间起个名字'),
+        ),
+        const SizedBox(height: 12),
+        const Text('牌桌参数', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        Row(children: [
+          _numField('小盲', _sbCtrl),
+          const SizedBox(width: 8),
+          _numField('大盲', _bbCtrl),
+        ]),
+        const SizedBox(height: 8),
+        Row(children: [
+          _numField('买入下限', _minCtrl),
+          const SizedBox(width: 8),
+          _numField('买入上限', _maxCtrl),
+        ]),
+        const SizedBox(height: 8),
+        Row(children: [_numField('买入最小单位', _unitCtrl)]),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('是否有前注 (ante)'),
+          subtitle: const Text('开启后默认等于小盲', style: TextStyle(fontSize: 12, color: Colors.white54)),
+          value: _hasAnte,
+          onChanged: (v) => setState(() {
+            _hasAnte = v;
+            if (v && (_anteCtrl.text.trim().isEmpty || _anteCtrl.text.trim() == '0')) {
+              _anteCtrl.text = _sbCtrl.text.trim().isEmpty ? '10' : _sbCtrl.text.trim();
+            }
+          }),
+        ),
+        if (_hasAnte)
+          Row(children: [_numField('前注金额', _anteCtrl)]),
+        const SizedBox(height: 8),
+        Row(children: [_numField('每轮行动时间(秒)', _toCtrl)]),
+        const SizedBox(height: 8),
+        Row(children: [
+          _numField('每轮延长次数', _ecCtrl),
+          const SizedBox(width: 8),
+          _numField('每次延长时间(秒)', _esCtrl),
+        ]),
+        const SizedBox(height: 12),
+        const Text('AI 对手数量（单人测试发牌打牌流程用）', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        DropdownButton<int>(
+          value: _aiCount,
+          isExpanded: true,
+          items: List.generate(9, (i) => DropdownMenuItem(
+            value: i,
+            child: Text(i == 0 ? '无（真人局）' : '$i 个 AI 牌手'),
+          )),
+          onChanged: (v) => setState(() => _aiCount = v ?? 0),
+        ),
+        if (widget.showAiNote)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.blueGrey.shade800,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'AI 牌手由服务端自动坐入并发牌/下注，便于单人完整测试一手牌。'
+                '若创建/设置后看不到 AI，说明服务端尚未部署含 AI 的版本（需上传新版 server-deploy.zip）。',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ),
+          ),
+        const SizedBox(height: 12),
+        ElevatedButton(onPressed: _submit, child: Text(widget.submitLabel)),
+        if (widget.footer != null) ...[
+          const SizedBox(height: 8),
+          widget.footer!,
+        ],
+      ],
     );
   }
 }

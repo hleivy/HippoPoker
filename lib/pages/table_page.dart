@@ -179,13 +179,15 @@ class _TablePageState extends State<TablePage> {
   }
 
   // ---- 牌桌几何：顺时针排列，自己置底 ----
+  // 服务端的行动/庄家按钮采用“座位号递减”表示顺时针；这里让座位号递增在视觉上呈逆时针，
+  // 二者配合后，行动高亮（座位号递减）在屏幕上即表现为顺时针移动。
   Offset _seatPos(double cx, double cy, double rx, double ry, int n, int relIndex) {
-    final angle = pi / 2 + relIndex * (2 * pi / (n > 0 ? n : 1));
+    final angle = pi / 2 - relIndex * (2 * pi / (n > 0 ? n : 1));
     return Offset(cx + rx * cos(angle), cy + ry * sin(angle));
   }
 
   Offset _outerPos(double cx, double cy, double rx, double ry, int n, int relIndex, double factor) {
-    final angle = pi / 2 + relIndex * (2 * pi / (n > 0 ? n : 1));
+    final angle = pi / 2 - relIndex * (2 * pi / (n > 0 ? n : 1));
     return Offset(cx + rx * factor * cos(angle), cy + ry * factor * sin(angle));
   }
 
@@ -249,6 +251,20 @@ class _TablePageState extends State<TablePage> {
       return '${(chips / 1000).toStringAsFixed(chips % 1000 == 0 ? 0 : 1)}k';
     }
     return chips.toString();
+  }
+
+  // 安全解析牌列表：任一元素格式异常都跳过，避免整棵渲染树崩溃（曾导致 all-in 后白屏）
+  List<PokerCard> _parseCards(dynamic list) {
+    if (list is! List) return [];
+    final out = <PokerCard>[];
+    for (final c in list) {
+      if (c is Map<String, dynamic>) {
+        final rank = c['rank'];
+        final suit = c['suit'];
+        if (rank is int && suit is int) out.add(PokerCard(rank, suit));
+      }
+    }
+    return out;
   }
 
   // ---- 头像 ----
@@ -322,9 +338,7 @@ class _TablePageState extends State<TablePage> {
     final isTurn = p['isTurn'] == true;
     final tempLeft = p['tempLeft'] == true;
     final sittingOut = p['sittingOut'] == true;
-    final cards = (p['cards'] as List? ?? [])
-        .map((c) => PokerCard.fromJson(c as Map<String, dynamic>))
-        .toList();
+    final cards = _parseCards(p['cards']);
 
     final totalSec = (_c.actionTimeout > 0 ? _c.actionTimeout : 60);
     final progress = isTurn ? (_c.secondsLeft / totalSec).clamp(0.0, 1.0) : 0.0;
@@ -355,7 +369,7 @@ class _TablePageState extends State<TablePage> {
                 : null;
 
     return SizedBox(
-      width: 108,
+      width: 128,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -420,15 +434,18 @@ class _TablePageState extends State<TablePage> {
               ],
             ),
           ),
-          // 名字（完整显示，最多两行）
-          Text(name,
-              maxLines: 2,
-              textAlign: TextAlign.center,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: isSelf ? Colors.amber : Colors.white)),
+          // 名字：用 FittedBox 按宽度自适应缩放，避免“(AI)”等长后缀被换行
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(name,
+                maxLines: 1,
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: isSelf ? Colors.amber : Colors.white)),
+          ),
           const SizedBox(height: 2),
           // 筹码
           _buildChipStack(chips),
@@ -467,9 +484,7 @@ class _TablePageState extends State<TablePage> {
   // 我的手牌条（固定在底部操作条上方，防止被遮挡）
   Widget _buildMyHandBar(Map<String, dynamic>? me) {
     if (me == null) return const SizedBox.shrink();
-    final cards = (me['cards'] as List? ?? [])
-        .map((c) => PokerCard.fromJson(c as Map<String, dynamic>))
-        .toList();
+    final cards = _parseCards(me['cards']);
     if (cards.isEmpty) return const SizedBox.shrink();
     return Container(
       width: double.infinity,
@@ -497,9 +512,7 @@ class _TablePageState extends State<TablePage> {
       Map<String, dynamic>? me, int mySeat, int n, int dealerSeat, bool inProgress) {
     final stage = state['stage'] as String? ?? '';
     final pot = state['pot'] as int? ?? 0;
-    final community = (state['community'] as List? ?? [])
-        .map((c) => PokerCard.fromJson(c as Map<String, dynamic>))
-        .toList();
+    final community = _parseCards(state['community']);
     final lastResult = state['lastResult'] as Map<String, dynamic>?;
 
     return LayoutBuilder(
@@ -643,7 +656,7 @@ class _TablePageState extends State<TablePage> {
             left: posOffset.dx,
             top: posOffset.dy,
             child: Transform.translate(
-              offset: const Offset(-54, -75),
+              offset: const Offset(-64, -75),
               child: _buildSeat(p, isSelf, pos, isDealer, hideCards: false),
             ),
           ));
@@ -712,6 +725,15 @@ class _TablePageState extends State<TablePage> {
   }
 
   // ---- 操作按钮区 ----
+  // 根据当前预设（_betPreset）实时算出“加注”按钮要发送的目标金额，
+  // 保证下拉选项与按钮金额始终对应（不依赖单独的 _raiseTarget 初值）。
+  int _raiseTargetValue(int minTarget, int maxTarget, int currentBet, int pot) {
+    if (_betPreset == '全下') return maxTarget;
+    if (_betPreset == '自定义') return _raiseTarget.clamp(minTarget, maxTarget);
+    final f = {'1/3': 1 / 3, '1/2': 0.5, '2/3': 2 / 3, '满池': 1.0}[_betPreset] ?? 0.5;
+    return ((currentBet + (pot * f).round()).clamp(minTarget, maxTarget)).toInt();
+  }
+
   Widget _buildActionBar(bool myTurn, int callNeed, int minTarget, int maxTarget, int target,
       bool canRaise, int currentBet, int pot) {
     return Container(
@@ -1222,6 +1244,7 @@ class _TablePageState extends State<TablePage> {
       body: AnimatedBuilder(
         animation: _c,
         builder: (ctx, _) {
+          try {
           final state = _c.state;
           if (_autoCall && _c.myTurn) _scheduleAutoCall(); else _cancelAutoTimer();
           if (state == null) return const Center(child: Text('等待房间状态…'));
@@ -1244,7 +1267,7 @@ class _TablePageState extends State<TablePage> {
           final minTarget = currentBet + minRaise;
           final canRaise = maxTarget > minTarget;
           final pot = state['pot'] as int? ?? 0;
-          final target = _raiseTarget.clamp(minTarget, maxTarget);
+          final target = _raiseTargetValue(minTarget, maxTarget, currentBet, pot);
 
           return Center(
             child: ConstrainedBox(
@@ -1318,6 +1341,19 @@ class _TablePageState extends State<TablePage> {
               ),
             ),
           );
+          } catch (e, st) {
+            return Center(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    '牌桌渲染异常（已拦截白屏，可重试）：\n$e\n\n${st.toString().split('\n').take(12).join('\n')}',
+                    style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                  ),
+                ),
+              ),
+            );
+          }
         },
       ),
     );
