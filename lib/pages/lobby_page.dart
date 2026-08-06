@@ -19,7 +19,7 @@ class _LobbyPageState extends State<LobbyPage> {
   late final GameController _c = widget.controller;
   final _nameCtrl = TextEditingController();
   final _pwdCtrl = TextEditingController();
-  bool _navigated = false;
+  bool _inTable = false; // 当前是否已推入牌桌页（返回大厅后置回 false，保证可再次进入）
   bool _creating = false; // 是否处于“创建房间”表单
   bool _editingNick = false; // 大厅昵称是否处于编辑态（默认只读，点“编辑”才可改）
   Timer? _listTimer;
@@ -34,7 +34,7 @@ class _LobbyPageState extends State<LobbyPage> {
     _c.addListener(_onChange);
     // 每 3 秒自动刷新房间列表（不依赖手动刷新）
     _listTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!_navigated && mounted) _c.listRooms();
+      if (!_inTable && mounted) _c.listRooms();
     });
   }
 
@@ -55,14 +55,19 @@ class _LobbyPageState extends State<LobbyPage> {
     }
   }
 
+  // 进入牌桌：用 _inTable 标记防止重复推栈，返回大厅后复位，保证每次都能稳定进入
+  void _enterTable() {
+    if (_inTable || !mounted) return;
+    _inTable = true;
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => TablePage(controller: _c)))
+        .then((_) {
+      _inTable = false; // 从牌桌返回（离开房间）后允许再次进入
+    });
+  }
+
   void _onChange() {
-    // 仅当用户主动“加入”房间时才导航到牌桌；创建房间后仍停留在大厅
-    if (_c.roomId != null && !_navigated && mounted && _c.lastCreatedRoomId == null) {
-      _navigated = true;
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => TablePage(controller: _c)),
-      );
-    }
+    // 创建房间成功的提示：与进入逻辑解耦，先清标记避免拦截后续的自动进入
     if (_c.lastCreatedRoomId != null && mounted) {
       final id = _c.lastCreatedRoomId!;
       _c.lastCreatedRoomId = null;
@@ -71,6 +76,10 @@ class _LobbyPageState extends State<LobbyPage> {
       );
       // 创建成功后返回大厅列表，方便用户选择进入或继续创建
       setState(() => _creating = false);
+    }
+    // 已进入房间且当前不在牌桌页 → 自动进入牌桌（不依赖只置真不复位的标志，返回大厅后复位）
+    if (_c.roomId != null && !_inTable && mounted) {
+      _enterTable();
     }
     if (_c.errorMsg != null && mounted) {
       final msg = _c.errorMsg!;
@@ -522,12 +531,7 @@ class _LobbyPageState extends State<LobbyPage> {
                         const SizedBox(width: 4),
                         if (isInThisRoom)
                           ElevatedButton(
-                            onPressed: () {
-                              _navigated = true;
-                              Navigator.of(context).push(
-                                MaterialPageRoute(builder: (_) => TablePage(controller: _c)),
-                              );
-                            },
+                            onPressed: _enterTable,
                             child: const Text('进入'),
                           )
                         else

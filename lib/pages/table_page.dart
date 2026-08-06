@@ -23,8 +23,8 @@ class _TablePageState extends State<TablePage> {
   bool _reportShown = false;
   bool _autoCall = false;
   Timer? _autoTimer;
-  Timer? _bubbleTimer;
   Timer? _leaveSafetyTimer; // 离场保险：超时未收到 left 信号则强制返回大厅
+  Timer? _enterSyncTimer; // 进入后状态迟迟未到时自动重同步，避免卡在“正在进入房间”
 
   static const _stageLabels = {
     'waiting': '等待开始',
@@ -42,34 +42,38 @@ class _TablePageState extends State<TablePage> {
     _reportShown = false; // 每次进入牌桌重置，确保离场报告可再次弹出
     // 进入牌桌立即向服务端请求一次最新状态，避免停留在“等待房间状态”
     if (_c.roomId != null) _c.sync();
-    _bubbleTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
+    // 兜底：若状态迟迟未到达（首条 roomUpdate 丢失），每 2 秒重试同步，最多约 12 秒
+    _enterSyncTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
-      final st = _c.state;
-      if (st == null) return;
-      final players = (st['players'] as List? ?? [])
-          .map((p) => p as Map<String, dynamic>)
-          .toList();
-      if (_hasFreshActions(players)) setState(() {});
+      if (_c.state != null) {
+        _enterSyncTimer?.cancel();
+        _enterSyncTimer = null;
+        return;
+      }
+      if (_c.roomId != null) _c.sync();
     });
   }
 
   @override
   void dispose() {
     _cancelAutoTimer();
-    _bubbleTimer?.cancel();
     _leaveSafetyTimer?.cancel();
+    _enterSyncTimer?.cancel();
     super.dispose();
   }
 
-  bool _hasFreshActions(List<Map<String, dynamic>> players) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    for (final p in players) {
-      final la = p['lastAction'];
-      if (la is Map && (la['at'] as int? ?? 0) > 0) {
-        if (now - (la['at'] as int) < 4200) return true;
-      }
+  // 由当前手牌行动线派生“当前街”各玩家的最后行动（按座位号索引），
+  // 用于座位上方行动气泡：常驻显示直到进入下一街（street 变化时自然清空）。
+  Map<String, Map<String, dynamic>> _computeStreetActions(List<dynamic>? log, String stage) {
+    final map = <String, Map<String, dynamic>>{};
+    if (log == null) return map;
+    for (final e in log) {
+      if (e is! Map<String, dynamic>) continue;
+      if ((e['stage'] as String?) != stage) continue;
+      final seat = (e['seat'] as int?) ?? -1;
+      map['$seat'] = e; // 同一街同一人只保留最近一次行动
     }
-    return false;
+    return map;
   }
 
   void _scheduleAutoCall() {
@@ -264,12 +268,28 @@ class _TablePageState extends State<TablePage> {
     return out;
   }
 
-  // ---- 头像 ----
+  // ---- 头像（安全加载：资源缺失/解码失败时回退字母头像，绝不抛异常击穿界面）----
   Widget _buildAvatar(String displayName, {double radius = 22}) {
     final asset = aiAvatarFor(displayName);
     if (asset != null) {
-      return CircleAvatar(radius: radius, backgroundColor: Colors.grey.shade800, backgroundImage: AssetImage(asset));
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: Colors.grey.shade800,
+        child: ClipOval(
+          child: Image.asset(
+            asset,
+            width: radius * 2,
+            height: radius * 2,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _initialAvatar(displayName, radius),
+          ),
+        ),
+      );
     }
+    return _initialAvatar(displayName, radius);
+  }
+
+  Widget _initialAvatar(String displayName, double radius) {
     final base = displayName.replaceAll(' (AI)', '').trim();
     final initial = base.isNotEmpty ? base[0].toUpperCase() : '?';
     return CircleAvatar(
@@ -279,20 +299,14 @@ class _TablePageState extends State<TablePage> {
     );
   }
 
-  // ---- 行动气泡 ----
-  Widget? _buildActionBubble(Map<String, dynamic> p) {
-    final la = p['lastAction'];
-    if (la is! Map) return null;
-    final at = (la['at'] as int? ?? 0);
-    if (at <= 0) return null;
-    final age = DateTime.now().millisecondsSinceEpoch - at;
-    if (age < 0 || age > 4200) return null;
-    final action = (la['action'] as String?) ?? '';
-    final amount = (la['amount'] as int?) ?? 0;
-    final timeout = la['timeout'] == true;
+  // ---- 行动气泡（当前街，常驻到下一街，不按时间消失）----
+  Widget? _buildStreetActionBubble(Map<String, dynamic>? action) {
+    if (action == null) return null;
+    final act = (action['action'] as String?) ?? '';
+    final amount = (action['amount'] as int?) ?? 0;
     late String text;
     late Color color;
-    switch (action) {
+    switch (act) {
       case 'fold':
         text = '弃牌';
         color = Colors.red;
@@ -312,22 +326,17 @@ class _TablePageState extends State<TablePage> {
       default:
         return null;
     }
-    if (timeout) text = '⏱ $text';
-    final opacity = (1 - age / 4200).clamp(0.0, 1.0);
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 200),
-      opacity: opacity,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(color: color.withOpacity(0.92), borderRadius: BorderRadius.circular(12)),
-        child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-      ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: color.withOpacity(0.92), borderRadius: BorderRadius.circular(12)),
+      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
     );
   }
 
   // ---- 座位：纵向卡片，头像/名字/筹码/手牌依次向下，避免重叠 ----
   Widget _buildSeat(Map<String, dynamic> p, bool isSelf, String pos, bool isDealer,
-      {bool hideCards = false, bool isWinner = false}) {
+      {bool hideCards = false, bool isWinner = false,
+       required Map<String, Map<String, dynamic>> streetActions}) {
     final name = (p['name']?.toString() ?? '玩家');
     final chips = (p['chips'] as int?) ?? 0;
     final folded = p['folded'] == true;
@@ -446,7 +455,7 @@ class _TablePageState extends State<TablePage> {
                           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
                     ),
                   ),
-                if (_buildActionBubble(p) case final bubble?)
+                if (_buildStreetActionBubble(streetActions['${p['seat']}']) case final bubble?)
                   Positioned(top: -12, child: bubble),
               ],
             ),
@@ -498,27 +507,84 @@ class _TablePageState extends State<TablePage> {
     );
   }
 
-  // 我的手牌条（固定在底部操作条上方，防止被遮挡）
-  Widget _buildMyHandBar(Map<String, dynamic>? me) {
-    if (me == null) return const SizedBox.shrink();
-    final cards = _parseCards(me['cards']);
-    if (cards.isEmpty) return const SizedBox.shrink();
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      color: Colors.black54,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('我的手牌', style: TextStyle(color: Colors.white70, fontSize: 12)),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: cards.map((c) => Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: PokerCardView(card: c, width: 56, height: 78),
-            )).toList(),
+  // ---- 桌面中心：当前手牌行动线（各玩家从翻前开始的分街行动）----
+  void _showActionLinesDialog(Map<String, dynamic> state, List<dynamic> actionLog) {
+    final community = _parseCards(state['community']);
+    final stages = ['preflop', 'flop', 'turn', 'river'];
+    final byStage = <String, List<Map<String, dynamic>>>{
+      for (final s in stages) s: <Map<String, dynamic>>[],
+    };
+    for (final e in actionLog) {
+      if (e is! Map<String, dynamic>) continue;
+      final st = (e['stage'] as String?) ?? '';
+      if (byStage.containsKey(st)) byStage[st]!.add(e);
+    }
+    Widget stageBlock(String st) {
+      final acts = byStage[st]!;
+      final cards = st == 'flop'
+          ? community.take(3)
+          : st == 'turn'
+              ? community.take(4)
+              : st == 'river'
+                  ? community.take(5)
+                  : <PokerCard>[];
+      final children = <Widget>[
+        Row(
+          children: [
+            Text(_stageLabels[st] ?? st, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            const SizedBox(width: 8),
+            ...cards.map((c) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 1),
+                  child: PokerCardView(card: c, width: 28, height: 40),
+                )),
+          ],
+        ),
+        const SizedBox(height: 4),
+      ];
+      if (acts.isEmpty) {
+        children.add(const Text('无行动', style: TextStyle(fontSize: 12, color: Colors.white54)));
+      } else {
+        for (final a in acts) {
+          final act = (a['action'] as String?) ?? '';
+          final amt = (a['amount'] as int?) ?? 0;
+          final nm = a['name']?.toString() ?? '玩家';
+          final t = switch (act) {
+            'fold' => '弃牌',
+            'check' => '过牌',
+            'call' => '跟注 $amt',
+            'raise' => '加注到 $amt',
+            _ => act,
+          };
+          children.add(Padding(
+            padding: const EdgeInsets.only(left: 8, bottom: 2),
+            child: Text('$nm：$t', style: const TextStyle(fontSize: 12, color: Colors.white70)),
+          ));
+        }
+      }
+      children.add(const SizedBox(height: 12));
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    }
+
+    showDialog(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: Text('第 ${state['handNumber'] ?? 0} 手 · 行动线'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 460,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('底池：${state['pot'] ?? 0}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                ...stages.map(stageBlock),
+              ],
+            ),
           ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dctx).pop(), child: const Text('关闭')),
         ],
       ),
     );
@@ -526,7 +592,8 @@ class _TablePageState extends State<TablePage> {
 
   // ---- 牌桌区域 ----
   Widget _buildTableArea(Map<String, dynamic> state, List<Map<String, dynamic>> players,
-      Map<String, dynamic>? me, int mySeat, int n, int dealerSeat, bool inProgress) {
+      Map<String, dynamic>? me, int mySeat, int n, int dealerSeat, bool inProgress,
+      Map<String, Map<String, dynamic>> streetActions) {
     final stage = state['stage'] as String? ?? '';
     final pot = state['pot'] as int? ?? 0;
     final community = _parseCards(state['community']);
@@ -690,8 +757,9 @@ class _TablePageState extends State<TablePage> {
             top: posOffset.dy,
             child: Transform.translate(
               offset: const Offset(-64, -75),
-              child: _buildSeat(p, isSelf, pos, isDealer,
-                  hideCards: false, isWinner: !inProgress && winnerIds.contains(p['id']?.toString())),
+            child: _buildSeat(p, isSelf, pos, isDealer,
+                hideCards: false, isWinner: !inProgress && winnerIds.contains(p['id']?.toString()),
+                streetActions: streetActions),
             ),
           ));
         }
@@ -1325,6 +1393,12 @@ class _TablePageState extends State<TablePage> {
           final pot = state['pot'] as int? ?? 0;
           final target = _raiseTargetValue(minTarget, maxTarget, currentBet, pot);
 
+          // 当前手牌行动线：按“当前街”派生座位气泡；摊牌/结束阶段沿用河牌行动便于复盘
+          final stageNow = state['stage'] as String? ?? '';
+          final displayStage = (stageNow == 'showdown' || stageNow == 'ended') ? 'river' : stageNow;
+          final actionLog = (state['actionLog'] as List?) ?? [];
+          final streetActions = _computeStreetActions(actionLog, displayStage);
+
           return Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1100),
@@ -1374,10 +1448,9 @@ class _TablePageState extends State<TablePage> {
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: _buildTableArea(state, players, me, mySeat, n, dealerSeat, inProgress),
+                          child: _buildTableArea(state, players, me, mySeat, n, dealerSeat, inProgress, streetActions),
                         ),
                       ),
-                      _buildMyHandBar(me),
                       if (myTurn)
                         _buildActionBar(myTurn, callNeed, minTarget, maxTarget, target, canRaise, currentBet, pot),
                     ],
@@ -1394,12 +1467,27 @@ class _TablePageState extends State<TablePage> {
                         ),
                       ),
                     ),
-                  // 版本号：左下角，避开我的手牌条/操作条
+                  // 桌面中心区域：当前手牌行动线查看
+                  if (actionLog.isNotEmpty)
+                    Positioned(
+                      top: 6,
+                      right: 8,
+                      child: ElevatedButton.icon(
+                        onPressed: () => _showActionLinesDialog(state, actionLog),
+                        icon: const Icon(Icons.timeline, size: 16),
+                        label: const Text('行动线'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blueGrey.shade700,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          textStyle: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ),
+                  // 版本号：左下角，避开底部操作条
                   Positioned(
                     left: 8,
-                    bottom: (me != null && (me['cards'] as List? ?? []).isNotEmpty)
-                        ? (myTurn ? 190 : 120)
-                        : 8,
+                    bottom: myTurn ? 84 : 8,
                     child: Text(
                       '内部测试版 v$kAppVersion · 服务端 v${_c.serverVersion ?? '连接中…'}',
                       style: const TextStyle(color: Colors.white38, fontSize: 10),
