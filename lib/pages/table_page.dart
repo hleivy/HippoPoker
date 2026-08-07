@@ -16,7 +16,7 @@ class TablePage extends StatefulWidget {
   State<TablePage> createState() => _TablePageState();
 }
 
-class _TablePageState extends State<TablePage> {
+class _TablePageState extends State<TablePage> with TickerProviderStateMixin {
   late final GameController _c = widget.controller;
   int _raiseTarget = 0;
   String _betPreset = '1/2';
@@ -25,6 +25,15 @@ class _TablePageState extends State<TablePage> {
   Timer? _autoTimer;
   Timer? _leaveSafetyTimer; // 离场保险：超时未收到 left 信号则强制返回大厅
   Timer? _enterSyncTimer; // 进入后状态迟迟未到时自动重同步，避免卡在“正在进入房间”
+  late final AnimationController _winAnim; // 赢家动画：本手结束时脉冲高亮
+  late final Animation<double> _winPulse;
+  // 筹码飞向赢家动画
+  late final AnimationController _chipFlightAnim;
+  late Animation<Offset> _chipFlight;
+  int? _lastAnimatedHand;
+  Offset _chipStart = Offset.zero;
+  Offset _chipEnd = Offset.zero;
+  bool _showChipFlight = false;
 
   static const _stageLabels = {
     'waiting': '等待开始',
@@ -52,6 +61,20 @@ class _TablePageState extends State<TablePage> {
       }
       if (_c.roomId != null) _c.sync();
     });
+    // 赢家动画控制器：本手结束时以脉冲缩放明确突出赢家横幅
+    _winAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 850))
+      ..repeat(reverse: true);
+    _winPulse = Tween<double>(begin: 0.92, end: 1.12)
+        .animate(CurvedAnimation(parent: _winAnim, curve: Curves.easeInOut));
+    // 筹码飞向赢家动画：手牌结束时从底池中心飞到赢家头像
+    _chipFlightAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+    _chipFlight = Tween<Offset>(begin: Offset.zero, end: Offset.zero)
+        .animate(CurvedAnimation(parent: _chipFlightAnim, curve: Curves.easeInOutCubic));
+    _chipFlightAnim.addStatusListener((status) {
+      if (status == AnimationStatus.completed && mounted) {
+        setState(() => _showChipFlight = false);
+      }
+    });
   }
 
   @override
@@ -59,21 +82,67 @@ class _TablePageState extends State<TablePage> {
     _cancelAutoTimer();
     _leaveSafetyTimer?.cancel();
     _enterSyncTimer?.cancel();
+    _winAnim.dispose();
+    _chipFlightAnim.dispose();
     super.dispose();
   }
 
-  // 由当前手牌行动线派生“当前街”各玩家的最后行动（按座位号索引），
-  // 用于座位上方行动气泡：常驻显示直到进入下一街（street 变化时自然清空）。
-  Map<String, Map<String, dynamic>> _computeStreetActions(List<dynamic>? log, String stage) {
+  // 由当前手牌行动线派生各玩家的最近一次行动（按座位号索引，跨所有街）。
+  // 进入下一条街后，上一街的行动不会消失，直到该玩家在本街再次行动才被覆盖。
+  Map<String, Map<String, dynamic>> _computeLastActions(List<dynamic>? log, String stage) {
     final map = <String, Map<String, dynamic>>{};
     if (log == null) return map;
     for (final e in log) {
       if (e is! Map<String, dynamic>) continue;
-      if ((e['stage'] as String?) != stage) continue;
       final seat = (e['seat'] as int?) ?? -1;
-      map['$seat'] = e; // 同一街同一人只保留最近一次行动
+      map['$seat'] = e; // 同一玩家只保留最近一次行动
     }
     return map;
+  }
+
+  // 本手赢家显示名（优先用 lastResult.winners 的 name，回退到 id 查座位名）
+  String _winnerDisplayName(List<Map<String, dynamic>> players, Map<String, dynamic> lastResult) {
+    final winners = lastResult['winners'];
+    if (winners is List && winners.isNotEmpty) {
+      final names = winners
+          .where((w) => w is Map && w['name'] != null)
+          .map((w) => w['name'].toString())
+          .join('、');
+      if (names.isNotEmpty) return names;
+    }
+    final ids = <String>{};
+    final pots = lastResult['pots'];
+    if (pots is List) {
+      for (final e in pots) {
+        if (e is Map && e['winners'] is List) {
+          for (final w in e['winners']) {
+            if (w is Map && w['id'] != null) ids.add(w['id'].toString());
+          }
+        }
+      }
+    }
+    final nameMap = {for (final p in players) p['id'].toString(): p['name']?.toString() ?? ''};
+    final fallback = ids.map((id) => nameMap[id] ?? id).join('、');
+    return fallback.isNotEmpty ? fallback : '赢家';
+  }
+
+  // 本手赢家总赢取筹码数
+  String _winnerAmount(Map<String, dynamic> lastResult) {
+    int total = 0;
+    final winners = lastResult['winners'];
+    if (winners is List) {
+      for (final w in winners) {
+        if (w is Map && w['amount'] is num) total += (w['amount'] as num).toInt();
+      }
+    }
+    if (total > 0) return '$total';
+    final pots = lastResult['pots'];
+    if (pots is List) {
+      for (final e in pots) {
+        if (e is Map && e['amount'] is num) total += (e['amount'] as num).toInt();
+      }
+    }
+    return '$total';
   }
 
   void _scheduleAutoCall() {
@@ -139,6 +208,16 @@ class _TablePageState extends State<TablePage> {
       final report = _c.dailyReport!;
       final players = (report['players'] as List?) ?? [];
       final title = (report['title'] as String?) ?? '当日输赢报告（${report['date'] ?? ''}）';
+      final handCount = (report['handCount'] as int?) ?? 0;
+      final durationMs = (report['durationMs'] as int?) ?? 0;
+      final startedAt = (report['startedAt'] as int?) ?? 0;
+      final startedText = startedAt > 0
+          ? DateTime.fromMillisecondsSinceEpoch(startedAt).toLocal().toString().substring(0, 16).replaceFirst('T', ' ')
+          : '';
+      final durationSec = (durationMs / 1000).round();
+      final durM = durationSec ~/ 60;
+      final durS = durationSec % 60;
+      final durText = durM > 0 ? '$durM 分 $durS 秒' : '$durS 秒';
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         showDialog(
@@ -150,17 +229,22 @@ class _TablePageState extends State<TablePage> {
               width: double.maxFinite,
               child: ListView(
                 shrinkWrap: true,
-                children: players.map((p) {
-                  final m = p as Map<String, dynamic>;
-                  final wl = (m['winLoss'] as num?)?.toInt() ?? 0;
-                  final remain = ((m['chips'] as num?)?.toInt() ?? 0) + ((m['cashedOut'] as num?)?.toInt() ?? 0);
-                  return ListTile(
-                    title: Text(m['name']?.toString() ?? '玩家'),
-                    subtitle: Text('总买入 ${m['totalBuyIn']} · 剩余 ${remain}'),
-                    trailing: Text('净输赢 ${wl >= 0 ? '+' : ''}$wl',
-                        style: TextStyle(color: wl >= 0 ? Colors.green : Colors.red, fontWeight: FontWeight.bold)),
-                  );
-                }).toList(),
+                children: [
+                  Text('手牌数：$handCount${startedText.isNotEmpty ? '　开始时间：$startedText' : ''}'),
+                  Text('已进行时长：$durText'),
+                  const Divider(color: Colors.white24),
+                  ...players.map((p) {
+                    final m = p as Map<String, dynamic>;
+                    final wl = (m['winLoss'] as num?)?.toInt() ?? 0;
+                    final remain = ((m['chips'] as num?)?.toInt() ?? 0) + ((m['cashedOut'] as num?)?.toInt() ?? 0);
+                    return ListTile(
+                      title: Text(m['name']?.toString() ?? '玩家'),
+                      subtitle: Text('总买入 ${m['totalBuyIn']} · 剩余 ${remain}'),
+                      trailing: Text('净输赢 ${wl >= 0 ? '+' : ''}$wl',
+                          style: TextStyle(color: wl >= 0 ? Colors.green : Colors.red, fontWeight: FontWeight.bold)),
+                    );
+                  }),
+                ],
               ),
             ),
             actions: [
@@ -205,8 +289,8 @@ class _TablePageState extends State<TablePage> {
     return 'MP';
   }
 
-  // ---- 筹码图标：自定义绘制高清筹码 ----
-  Widget _buildChipStack(int chips, {double size = 15}) {
+  // ---- 筹码图标：自定义绘制高清专业筹码 ----
+  Widget _buildChipStack(int chips, {double size = 18, bool showText = true}) {
     if (chips <= 0) return const SizedBox.shrink();
     final tiers = [1, 100, 500, 2000, 10000, 50000, 250000];
     final colors = [
@@ -215,24 +299,29 @@ class _TablePageState extends State<TablePage> {
       const Color(0xFF43A047), // 绿
       const Color(0xFFFB8C00), // 橙
       const Color(0xFF8E24AA), // 紫
-      const Color(0xFF000000), // 黑
+      const Color(0xFF212121), // 黑
     ];
     int count = 1;
     for (int i = 0; i < tiers.length; i++) {
       if (chips >= tiers[i]) count = (i + 1).clamp(1, 6);
     }
+    final overlap = size * 0.26;
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         SizedBox(
           width: size,
-          height: size + (count - 1) * size * 0.22,
+          height: size + (count - 1) * overlap,
           child: Stack(
             clipBehavior: Clip.none,
+            alignment: Alignment.bottomCenter,
             children: List.generate(count, (i) {
+              // 轻微随机偏移，让筹码堆更自然
+              final jitter = (i % 2 == 0 ? 0.0 : size * 0.04);
               return Positioned(
-                bottom: i * size * 0.22,
+                bottom: i * overlap,
+                left: jitter,
                 child: CustomPaint(
                   size: Size(size, size),
                   painter: _ChipPainter(color: colors[i % colors.length]),
@@ -241,9 +330,80 @@ class _TablePageState extends State<TablePage> {
             }),
           ),
         ),
-        const SizedBox(width: 4),
-        Text(_fmtChips(chips), style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+        if (showText) ...[
+          const SizedBox(width: 4),
+          Text(_fmtChips(chips), style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+        ],
       ],
+    );
+  }
+
+  // ---- 飞行筹码（用于本手结束时飞向赢家）----
+  Widget _buildFlyingChips() {
+    const size = 22.0;
+    const colors = [
+      Color(0xFFE53935),
+      Color(0xFF1E88E5),
+      Color(0xFF43A047),
+      Color(0xFFFB8C00),
+      Color(0xFF8E24AA),
+    ];
+    const overlap = size * 0.28;
+    return SizedBox(
+      width: size,
+      height: size + (colors.length - 1) * overlap,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.bottomCenter,
+        children: List.generate(colors.length, (i) {
+          return Positioned(
+            bottom: i * overlap,
+            child: CustomPaint(
+              size: const Size(size, size),
+              painter: _ChipPainter(color: colors[i]),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  // ---- 底池筹码堆：更大、居中 ----
+  Widget _buildPotChipStack(int pot) {
+    if (pot <= 0) return const SizedBox.shrink();
+    final size = 28.0;
+    final tiers = [1, 100, 500, 2000, 10000, 50000, 250000];
+    final colors = [
+      const Color(0xFFE53935),
+      const Color(0xFF1E88E5),
+      const Color(0xFF43A047),
+      const Color(0xFFFB8C00),
+      const Color(0xFF8E24AA),
+      const Color(0xFF212121),
+    ];
+    int count = 1;
+    for (int i = 0; i < tiers.length; i++) {
+      if (pot >= tiers[i]) count = (i + 1).clamp(1, 6);
+    }
+    final overlap = size * 0.28;
+    return SizedBox(
+      width: size * 1.6,
+      height: size + (count - 1) * overlap,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.bottomCenter,
+        children: List.generate(count, (i) {
+          final jitter = (i % 2 == 0 ? -size * 0.04 : size * 0.04);
+          return Positioned(
+            bottom: i * overlap,
+            left: (size * 0.8 - size / 2) + jitter,
+            child: CustomPaint(
+              size: Size(size, size),
+              painter: _ChipPainter(color: colors[i % colors.length]),
+            ),
+          );
+        }),
+      ),
     );
   }
 
@@ -335,8 +495,8 @@ class _TablePageState extends State<TablePage> {
 
   // ---- 座位：纵向卡片，头像/名字/筹码/手牌依次向下，避免重叠 ----
   Widget _buildSeat(Map<String, dynamic> p, bool isSelf, String pos, bool isDealer,
-      {bool hideCards = false, bool isWinner = false,
-       required Map<String, Map<String, dynamic>> streetActions}) {
+      {bool hideCards = false, bool isWinner = false, int winAmount = 0,
+       required Map<String, Map<String, dynamic>> lastActions}) {
     final name = (p['name']?.toString() ?? '玩家');
     final chips = (p['chips'] as int?) ?? 0;
     final folded = p['folded'] == true;
@@ -349,9 +509,12 @@ class _TablePageState extends State<TablePage> {
     final totalSec = (_c.actionTimeout > 0 ? _c.actionTimeout : 60);
     final progress = isTurn ? (_c.secondsLeft / totalSec).clamp(0.0, 1.0) : 0.0;
 
+    final narrow = MediaQuery.of(context).size.width < 400;
+    final cardW = narrow ? 30.0 : 34.0;
+    final cardH = narrow ? 42.0 : 48.0;
     Widget handWidget;
     if (hideCards) {
-      handWidget = const SizedBox(width: 34);
+      handWidget = SizedBox(width: cardW);
     } else {
       handWidget = Row(
         mainAxisSize: MainAxisSize.min,
@@ -359,8 +522,8 @@ class _TablePageState extends State<TablePage> {
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 2),
             child: i < cards.length
-                ? PokerCardView(card: cards[i], width: 34, height: 48)
-                : const CardBack(width: 34, height: 48),
+                ? PokerCardView(card: cards[i], width: cardW, height: cardH)
+                : CardBack(width: cardW, height: cardH),
           );
         }),
       );
@@ -423,43 +586,50 @@ class _TablePageState extends State<TablePage> {
                     child: _buildAvatar(name, radius: 30),
                   ),
                 ),
-                // 胜者徽章：摊牌结束时给赢家一个明确的绿色高亮
+                // 胜者徽章：摊牌结束时给赢家一个明确的绿色高亮 + 脉冲缩放
                 if (isWinner)
                   Positioned(
                     top: -6,
                     left: 0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: Colors.greenAccent,
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 3)],
+                    child: ScaleTransition(
+                      scale: _winPulse,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Colors.greenAccent,
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 3)],
+                        ),
+                        child: const Text('WIN',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black)),
                       ),
-                      child: const Text('WIN',
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black)),
                     ),
                   ),
-                // 位置徽章（UTG/SB/BB/D 等）
-                if (pos.isNotEmpty)
+                // 赢家获得筹码的浮动提示
+                if (isWinner && winAmount > 0)
                   Positioned(
-                    top: 6,
-                    right: 0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: pos == 'BTN' ? Colors.amber : Colors.blueGrey.shade700,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.white70, width: 0.5),
-                      ),
-                      child: Text(pos == 'BTN' ? 'D' : pos,
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
-                    ),
+                    top: -34,
+                    left: 0,
+                    child: _WinFloatLabel(amount: winAmount),
                   ),
-                if (_buildStreetActionBubble(streetActions['${p['seat']}']) case final bubble?)
+                if (_buildStreetActionBubble(lastActions['${p['seat']}']) case final bubble?)
                   Positioned(top: -12, child: bubble),
               ],
             ),
           ),
+          // 位置徽章：移到头像下方，避免遮挡头像
+          if (pos.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.only(top: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: pos == 'BTN' ? Colors.amber : Colors.blueGrey.shade700,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white70, width: 0.5),
+              ),
+              child: Text(pos == 'BTN' ? 'D' : pos,
+                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
+            ),
           // 名字：用 FittedBox 按宽度自适应缩放，避免“(AI)”等长后缀被换行
           FittedBox(
             fit: BoxFit.scaleDown,
@@ -486,6 +656,20 @@ class _TablePageState extends State<TablePage> {
           const SizedBox(height: 4),
           // 手牌
           Opacity(opacity: folded ? 0.35 : 1, child: handWidget),
+          // 摊牌时标注牌型（如“三条”“顺子”）；弃牌者不标注
+          if (p['handType'] != null && !folded)
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade700,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(p['handType'].toString(),
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
+              ),
+            ),
         ],
       ),
     );
@@ -593,20 +777,30 @@ class _TablePageState extends State<TablePage> {
   // ---- 牌桌区域 ----
   Widget _buildTableArea(Map<String, dynamic> state, List<Map<String, dynamic>> players,
       Map<String, dynamic>? me, int mySeat, int n, int dealerSeat, bool inProgress,
-      Map<String, Map<String, dynamic>> streetActions) {
+      Map<String, Map<String, dynamic>> lastActions) {
     final stage = state['stage'] as String? ?? '';
     final pot = state['pot'] as int? ?? 0;
     final community = _parseCards(state['community']);
     final lastResult = state['lastResult'] as Map<String, dynamic>?;
-    // 摊牌/结束时解析赢家 id，用于座位高亮（胜负明确展示）
+    // 摊牌/结束时解析赢家 id 与每人赢得金额，用于座位高亮和筹码飞行动画
     final Set<String> winnerIds = {};
+    final Map<String, int> winAmountById = {};
     if (!inProgress && lastResult != null) {
       final pots = lastResult['pots'];
       if (pots is List) {
         for (final potEntry in pots) {
           if (potEntry is Map && potEntry['winners'] is List) {
-            for (final w in potEntry['winners']) {
-              if (w is Map && w['id'] != null) winnerIds.add(w['id'].toString());
+            final amt = (potEntry['amount'] as num?)?.toInt() ?? 0;
+            final ws = potEntry['winners'];
+            if (ws is List && ws.isNotEmpty) {
+              final split = amt ~/ ws.length;
+              for (final w in ws) {
+                if (w is Map && w['id'] != null) {
+                  final id = w['id'].toString();
+                  winnerIds.add(id);
+                  winAmountById[id] = (winAmountById[id] ?? 0) + split;
+                }
+              }
             }
           }
         }
@@ -620,8 +814,9 @@ class _TablePageState extends State<TablePage> {
         final h = cons.maxHeight;
         final cx = w / 2;
         final cy = h / 2;
-        final rx = w * 0.36;
-        final ry = h * 0.34;
+        final isNarrow = w < 400;
+        final rx = w * (isNarrow ? 0.34 : 0.36);
+        final ry = h * (isNarrow ? 0.29 : 0.33);
         final items = <Widget>[];
 
         // 木边椭圆
@@ -662,27 +857,38 @@ class _TablePageState extends State<TablePage> {
           left: cx,
           top: cy,
           child: Transform.translate(
-            offset: const Offset(-120, -58),
+            offset: Offset(-120, isNarrow ? -70 : -58),
             child: SizedBox(
-              width: 240,
+              width: isNarrow ? 220 : 240,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
                     decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(16)),
-                    child: Text('底池  $pot',
-                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _buildPotChipStack(pot),
+                        const SizedBox(width: 6),
+                        Text('底池  $pot',
+                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: List.generate(5, (i) {
+                      final cw = isNarrow ? 40.0 : 46.0;
+                      final ch = isNarrow ? 56.0 : 64.0;
                       return Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 3),
                         child: i < community.length
-                            ? PokerCardView(card: community[i], width: 46, height: 64)
-                            : const CardBack(width: 46, height: 64),
+                            ? PokerCardView(card: community[i], width: cw, height: ch)
+                            : CardBack(width: cw, height: ch),
                       );
                     }),
                   ),
@@ -702,6 +908,39 @@ class _TablePageState extends State<TablePage> {
           ),
         ));
 
+        // 赢家动画横幅：本手结束时明确展示赢家（含赢取筹码）
+        if (!inProgress && lastResult != null && winnerIds.isNotEmpty) {
+          final wname = _winnerDisplayName(players, lastResult);
+          final wamt = _winnerAmount(lastResult);
+          items.add(Positioned(
+            left: cx,
+            top: 6,
+            child: Transform.translate(
+              offset: const Offset(-110, 0),
+              child: ScaleTransition(
+                scale: _winPulse,
+                child: Container(
+                  width: 220,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [Colors.amber.shade700, Colors.orange.shade800]),
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 10, spreadRadius: 1)],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('🏆 本手赢家', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                      Text(wname, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                      Text('+$wamt', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ));
+        }
+
         // 庄家筹码：放在庄家座位内侧（桌面区域）
         if (dealerSeat >= 0 && n > 0) {
           final dealerRel = (((dealerSeat - mySeat) % n) + n) % n;
@@ -717,6 +956,7 @@ class _TablePageState extends State<TablePage> {
         }
 
         // 各座位
+        Offset? winnerPosOffset; // 用于筹码飞向赢家动画
         for (final p in players) {
           final seat = (p['seat'] as int?) ?? 0;
           final rel = n > 0 ? (((seat - mySeat) % n) + n) % n : 0;
@@ -727,8 +967,10 @@ class _TablePageState extends State<TablePage> {
           final isDealer = p['id'] == _c.dealerId;
           final isSelf = p['id'] == _c.playerId;
           final bet = (p['bet'] as int?) ?? 0;
+          final isWinner = !inProgress && winnerIds.contains(p['id']?.toString());
 
           final posOffset = _seatPos(cx, cy, rx, ry, n, rel);
+          if (isWinner) winnerPosOffset = posOffset;
 
           // 已下注筹码（靠近底池）
           if (bet > 0) {
@@ -756,10 +998,43 @@ class _TablePageState extends State<TablePage> {
             left: posOffset.dx,
             top: posOffset.dy,
             child: Transform.translate(
-              offset: const Offset(-64, -75),
+              offset: isNarrow ? const Offset(-60, -68) : const Offset(-64, -75),
             child: _buildSeat(p, isSelf, pos, isDealer,
-                hideCards: false, isWinner: !inProgress && winnerIds.contains(p['id']?.toString()),
-                streetActions: streetActions),
+                hideCards: false, isWinner: isWinner,
+                winAmount: winAmountById[p['id']?.toString()] ?? 0,
+                lastActions: lastActions),
+            ),
+          ));
+        }
+
+        // 筹码飞向赢家动画：本手结束时从底池中心飞到赢家头像中心
+        if (!inProgress && winnerPosOffset != null) {
+          final handNo = state['handNumber'] as int? ?? 0;
+          if (_lastAnimatedHand != handNo) {
+            _lastAnimatedHand = handNo;
+            _chipStart = Offset(cx, cy + (isNarrow ? -55 : -48));
+            _chipEnd = winnerPosOffset +
+                (isNarrow ? const Offset(-24, -30) : const Offset(-28, -37));
+            _showChipFlight = true;
+            _chipFlight = Tween<Offset>(begin: _chipStart, end: _chipEnd).animate(
+              CurvedAnimation(parent: _chipFlightAnim, curve: Curves.easeInOutCubic),
+            );
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _chipFlightAnim.forward(from: 0);
+            });
+          }
+        }
+        if (_showChipFlight) {
+          items.add(Positioned(
+            left: 0,
+            top: 0,
+            child: AnimatedBuilder(
+              animation: _chipFlightAnim,
+              builder: (context, child) => Transform.translate(
+                offset: _chipFlight.value,
+                child: child,
+              ),
+              child: _buildFlyingChips(),
             ),
           ));
         }
@@ -830,7 +1105,8 @@ class _TablePageState extends State<TablePage> {
   // 根据当前预设（_betPreset）实时算出“加注”按钮要发送的目标金额，
   // 保证下拉选项与按钮金额始终对应（不依赖单独的 _raiseTarget 初值）。
   int _raiseTargetValue(int minTarget, int maxTarget, int currentBet, int pot) {
-    if (_betPreset == '全下') return maxTarget;
+    if (minTarget > maxTarget) return maxTarget;
+    if (_betPreset == '全下') return maxTarget.clamp(minTarget, maxTarget);
     if (_betPreset == '自定义') return _raiseTarget.clamp(minTarget, maxTarget);
     final f = {'1/3': 1 / 3, '1/2': 0.5, '2/3': 2 / 3, '满池': 1.0}[_betPreset] ?? 0.5;
     return ((currentBet + (pot * f).round()).clamp(minTarget, maxTarget)).toInt();
@@ -886,10 +1162,14 @@ class _TablePageState extends State<TablePage> {
                             if (v == '全下') {
                               _raiseTarget = maxTarget;
                             } else if (v == '自定义') {
-                              _raiseTarget = ((minTarget + maxTarget) ~/ 2).clamp(minTarget, maxTarget);
+                              _raiseTarget = minTarget > maxTarget
+                                  ? maxTarget
+                                  : ((minTarget + maxTarget) ~/ 2).clamp(minTarget, maxTarget);
                             } else {
                               final f = {'1/3': 1 / 3, '1/2': 0.5, '2/3': 2 / 3, '满池': 1.0}[v]!;
-                              _raiseTarget = ((currentBet + (pot * f).round()).clamp(minTarget, maxTarget)).toInt();
+                              _raiseTarget = minTarget > maxTarget
+                                  ? maxTarget
+                                  : ((currentBet + (pot * f).round()).clamp(minTarget, maxTarget)).toInt();
                             }
                           });
                         },
@@ -1148,6 +1428,10 @@ class _TablePageState extends State<TablePage> {
     final handNo = (h['handNumber'] as int?) ?? 0;
     final pot = (h['pot'] as int?) ?? 0;
     final winners = (h['winners'] as List?) ?? [];
+    final endedAt = (h['endedAt'] as int?) ?? 0;
+    final endedText = endedAt > 0
+        ? DateTime.fromMillisecondsSinceEpoch(endedAt).toLocal().toString().substring(0, 16).replaceFirst('T', ' ')
+        : '';
     List<dynamic>? myCards;
     if (_c.me != null) {
       final pc = (h['playerCards'] as List? ?? []).firstWhere(
@@ -1166,7 +1450,7 @@ class _TablePageState extends State<TablePage> {
       contentPadding: const EdgeInsets.symmetric(horizontal: 8),
       leading: _buildMiniHand(myCards),
       title: Text('第 $handNo 手 · 底池 $pot', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-      subtitle: Text('赢家：$winText', style: const TextStyle(fontSize: 12, color: Colors.amber)),
+      subtitle: Text('赢家：$winText${endedText.isNotEmpty ? ' · $endedText' : ''}', style: const TextStyle(fontSize: 12, color: Colors.amber)),
       trailing: const Icon(Icons.chevron_right, color: Colors.white54),
       onTap: () => _showHandDetail(h),
     );
@@ -1177,6 +1461,7 @@ class _TablePageState extends State<TablePage> {
     final actionLog = (h['actionLog'] as List? ?? []).cast<Map<String, dynamic>>();
     final playerCards = (h['playerCards'] as List? ?? []).cast<Map<String, dynamic>>();
     final winners = (h['winners'] as List? ?? []).cast<Map<String, dynamic>>();
+    final isShowdown = h['showdown'] == true;
 
     List<Widget> stageSection(String stage, List<PokerCard> cards, List<Map<String, dynamic>> actions) {
       return [
@@ -1246,16 +1531,32 @@ class _TablePageState extends State<TablePage> {
                 ...stageSection('turn', community.take(4).toList(), turn),
                 ...stageSection('river', community.take(5).toList(), river),
                 const Text('各人底牌', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                if (!isShowdown)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 4),
+                    child: Text('非摊牌局：仅显示你自己的底牌', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                  ),
                 const SizedBox(height: 4),
-                ...playerCards.map((pc) {
+                ...playerCards.where((pc) => isShowdown || pc['id'] == _c.playerId).map((pc) {
                   final name = pc['name']?.toString() ?? '玩家';
                   final cs = (pc['cards'] as List? ?? []);
+                  final htRaw = (h['handTypes'] is Map) ? (h['handTypes'] as Map)[pc['id']?.toString()] : null;
+                  final htName = htRaw is Map ? (htRaw['name']?.toString() ?? '') : '';
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Row(
                       children: [
                         SizedBox(width: 90, child: Text(name, style: const TextStyle(fontSize: 12))),
                         ...cs.map((c) => Padding(padding: const EdgeInsets.symmetric(horizontal: 1), child: _cardViewFromJson(c))),
+                        if (isShowdown && htName.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 6),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(color: Colors.amber.shade700, borderRadius: BorderRadius.circular(6)),
+                              child: Text(htName, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
+                            ),
+                          ),
                       ],
                     ),
                   );
@@ -1300,7 +1601,15 @@ class _TablePageState extends State<TablePage> {
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: _leave),
-        title: Text(roomName),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(roomName, style: const TextStyle(fontSize: 18)),
+            if (_c.roomId != null)
+              Text('房间号 ${_c.roomId}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal)),
+          ],
+        ),
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
@@ -1391,13 +1700,11 @@ class _TablePageState extends State<TablePage> {
           final minTarget = currentBet + minRaise;
           final canRaise = maxTarget > minTarget;
           final pot = state['pot'] as int? ?? 0;
-          final target = _raiseTargetValue(minTarget, maxTarget, currentBet, pot);
+          final target = (myTurn && canRaise) ? _raiseTargetValue(minTarget, maxTarget, currentBet, pot) : minTarget;
 
-          // 当前手牌行动线：按“当前街”派生座位气泡；摊牌/结束阶段沿用河牌行动便于复盘
-          final stageNow = state['stage'] as String? ?? '';
-          final displayStage = (stageNow == 'showdown' || stageNow == 'ended') ? 'river' : stageNow;
+          // 当前手牌行动线：跨所有街保留每位玩家最近一次行动，便于随时查看历史行动
           final actionLog = (state['actionLog'] as List?) ?? [];
-          final streetActions = _computeStreetActions(actionLog, displayStage);
+          final lastActions = _computeLastActions(actionLog, state['stage'] as String? ?? '');
 
           return Center(
             child: ConstrainedBox(
@@ -1448,11 +1755,24 @@ class _TablePageState extends State<TablePage> {
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: _buildTableArea(state, players, me, mySeat, n, dealerSeat, inProgress, streetActions),
+                          child: Stack(
+                            children: [
+                              // 桌面区域固定占满除底部行动栏外的全部空间，避免行动栏显隐导致抖动
+                              Positioned.fill(
+                                bottom: 130,
+                                child: _buildTableArea(state, players, me, mySeat, n, dealerSeat, inProgress, lastActions),
+                              ),
+                              if (myTurn)
+                                Positioned(
+                                  left: 0,
+                                  right: 0,
+                                  bottom: 0,
+                                  child: _buildActionBar(myTurn, callNeed, minTarget, maxTarget, target, canRaise, currentBet, pot),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
-                      if (myTurn)
-                        _buildActionBar(myTurn, callNeed, minTarget, maxTarget, target, canRaise, currentBet, pot),
                     ],
                   ),
                   // 未发牌时提示，避免进入房间后“像死机”
@@ -1516,6 +1836,69 @@ class _TablePageState extends State<TablePage> {
   }
 }
 
+class _WinFloatLabel extends StatefulWidget {
+  final int amount;
+  const _WinFloatLabel({required this.amount});
+
+  @override
+  State<_WinFloatLabel> createState() => _WinFloatLabelState();
+}
+
+class _WinFloatLabelState extends State<_WinFloatLabel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<Offset> _slide;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
+    _slide = Tween<Offset>(begin: Offset.zero, end: const Offset(0, -22))
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _fade = Tween<double>(begin: 1.0, end: 0.0)
+        .animate(CurvedAnimation(parent: _ctrl, curve: const Interval(0.5, 1.0, curve: Curves.easeOut)));
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, child) => Opacity(
+        opacity: _fade.value,
+        child: Transform.translate(
+          offset: _slide.value,
+          child: child,
+        ),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.amber,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 3)],
+        ),
+        child: Text('+${_fmtChipsStatic(widget.amount)}',
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black)),
+      ),
+    );
+  }
+
+  static String _fmtChipsStatic(int chips) {
+    if (chips >= 10000) {
+      return '${(chips / 1000).toStringAsFixed(chips % 1000 == 0 ? 0 : 1)}k';
+    }
+    return chips.toString();
+  }
+}
+
 class _ChipPainter extends CustomPainter {
   final Color color;
   const _ChipPainter({required this.color});
@@ -1524,21 +1907,95 @@ class _ChipPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final r = size.width / 2;
     final c = Offset(r, r);
+
     // 投影
-    canvas.drawCircle(c.translate(1, 1), r - 1, Paint()..color = Colors.black38..style = PaintingStyle.fill);
-    // 主体
-    canvas.drawCircle(c, r - 1, Paint()..color = color..style = PaintingStyle.fill);
-    // 外环白线
-    canvas.drawCircle(c, r - 2, Paint()..color = Colors.white70..style = PaintingStyle.stroke..strokeWidth = 1.5);
-    // 内环
-    canvas.drawCircle(c, r * 0.55, Paint()..color = Colors.white24..style = PaintingStyle.stroke..strokeWidth = 2);
-    // 边缘条纹
-    for (int i = 0; i < 8; i++) {
-      final a = i * pi / 4;
-      final p1 = c + Offset(cos(a) * r * 0.72, sin(a) * r * 0.72);
-      final p2 = c + Offset(cos(a) * r * 0.88, sin(a) * r * 0.88);
-      canvas.drawLine(p1, p2, Paint()..color = Colors.white.withOpacity(0.8)..strokeWidth = 1.5);
+    canvas.drawCircle(
+      c.translate(size.width * 0.06, size.height * 0.08),
+      r * 0.92,
+      Paint()..color = Colors.black45..style = PaintingStyle.fill,
+    );
+
+    // 主体：径向渐变营造 3D 凸起感
+    final bodyPaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(-0.25, -0.25),
+        radius: 0.85,
+        colors: [Color.lerp(color, Colors.white, 0.25)!, color, Color.lerp(color, Colors.black, 0.35)!],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(Rect.fromCircle(center: c, radius: r))
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(c, r * 0.92, bodyPaint);
+
+    // 外环凹槽
+    canvas.drawCircle(
+      c,
+      r * 0.88,
+      Paint()
+        ..color = Colors.black.withOpacity(0.25)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.06,
+    );
+
+    // 外环白边
+    canvas.drawCircle(
+      c,
+      r * 0.88,
+      Paint()
+        ..color = Colors.white.withOpacity(0.85)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.035,
+    );
+
+    // 边缘方块花（professional edge spots）
+    final spotCount = 8;
+    for (int i = 0; i < spotCount; i++) {
+      final a = i * 2 * pi / spotCount;
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: c + Offset(cos(a) * r * 0.80, sin(a) * r * 0.80),
+          width: r * 0.22,
+          height: r * 0.14,
+        ),
+        Radius.circular(r * 0.03),
+      );
+      canvas.drawRRect(
+        rect,
+        Paint()..color = (i % 2 == 0) ? Colors.white.withOpacity(0.95) : Colors.black.withOpacity(0.9),
+      );
     }
+
+    // 内圈装饰环
+    canvas.drawCircle(
+      c,
+      r * 0.50,
+      Paint()
+        ..color = Colors.white.withOpacity(0.70)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.04,
+    );
+    canvas.drawCircle(
+      c,
+      r * 0.38,
+      Paint()
+        ..color = Colors.black.withOpacity(0.18)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.025,
+    );
+
+    // 中心贴纸：白色圆底 + 微阴影
+    canvas.drawCircle(
+      c,
+      r * 0.32,
+      Paint()..color = Colors.white.withOpacity(0.95)..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      c,
+      r * 0.32,
+      Paint()
+        ..color = Colors.black.withOpacity(0.12)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.025,
+    );
   }
 
   @override

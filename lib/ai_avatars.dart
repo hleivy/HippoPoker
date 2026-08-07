@@ -22,6 +22,9 @@ const Map<String, String> kAiAvatarAssets = {
   'Doug Polk': 'images/avatars/doug_polk.jpg',
 };
 
+/// 所有可用 AI 牌手真名列表（与 server/src/roomManager.js 的 FAMOUS_PROS 保持一致）。
+final List<String> kAiNames = kAiAvatarAssets.keys.toList();
+
 /// 根据显示的玩家名（可能带 " (AI)" 后缀）返回头像资源路径，找不到则返回 null。
 String? aiAvatarFor(String displayName) {
   final base = displayName.replaceAll(' (AI)', '').trim();

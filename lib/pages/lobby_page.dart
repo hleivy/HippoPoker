@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../game_controller.dart';
 import '../config.dart';
+import '../ai_avatars.dart';
 import '../storage/settings_storage.dart';
 import 'table_page.dart';
 
@@ -116,6 +117,7 @@ class _LobbyPageState extends State<LobbyPage> {
       maxBuyIn: res.max,
       buyInUnit: res.unit.clamp(1, 999999),
       aiCount: res.aiCount,
+      aiNames: res.aiNames,
       actionTimeout: res.actionTimeout.clamp(5, 300),
       extensionCount: res.extensionCount.clamp(0, 20),
       extensionSeconds: res.extensionSeconds.clamp(0, 300),
@@ -138,6 +140,7 @@ class _LobbyPageState extends State<LobbyPage> {
       extensionCount: (room['extensionCount'] as int?) ?? 2,
       extensionSeconds: (room['extensionSeconds'] as int?) ?? 60,
       aiCount: (room['aiCount'] as int?) ?? (room['botCount'] as int?) ?? 0,
+      aiNames: (room['botNames'] as List? ?? []).map((e) => e.toString()).toList(),
     );
     showDialog(
       context: context,
@@ -162,6 +165,7 @@ class _LobbyPageState extends State<LobbyPage> {
                 'extensionCount': res.extensionCount.clamp(0, 20),
                 'extensionSeconds': res.extensionSeconds.clamp(0, 300),
                 'aiCount': res.aiCount,
+                'aiNames': res.aiNames,
               };
               if (adminPassword != null && adminPassword.isNotEmpty) {
                 _c.adminUpdateRoom({...params, 'password': adminPassword});
@@ -326,6 +330,84 @@ class _LobbyPageState extends State<LobbyPage> {
             TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('关闭')),
           ],
         ),
+      ),
+    );
+  }
+
+  // 大厅“战绩”：查看某房间所有人的输赢，并支持管理员密码重置统计
+  void _showRoomStatsDialog(Map<String, dynamic> room) {
+    final roomId = room['id']?.toString() ?? '';
+    final roomName = room['name']?.toString() ?? '房间';
+    _c.requestRoomReport(roomId);
+    showDialog(
+      context: context,
+      builder: (ctx) => AnimatedBuilder(
+        animation: _c,
+        builder: (ctx, child) {
+          final report = _c.roomReport;
+          final players = (report?['players'] as List?) ?? [];
+          final handCount = (report?['handCount'] as int?) ?? 0;
+          final durationMs = (report?['durationMs'] as int?) ?? 0;
+          final startedAt = (report?['startedAt'] as int?) ?? 0;
+          final startedText = startedAt > 0
+              ? DateTime.fromMillisecondsSinceEpoch(startedAt).toLocal().toString().substring(0, 16).replaceFirst('T', ' ')
+              : '';
+          final durationSec = (durationMs / 1000).round();
+          final durM = durationSec ~/ 60;
+          final durS = durationSec % 60;
+          final durText = durM > 0 ? '$durM 分 $durS 秒' : '$durS 秒';
+          return AlertDialog(
+            title: Text('房间战绩 · $roomName'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: report == null
+                  ? const Center(child: CircularProgressIndicator())
+                  : players.isEmpty
+                      ? const Center(child: Text('暂无战绩数据'))
+                      : ListView(
+                          shrinkWrap: true,
+                          children: [
+                            Text('手牌数：$handCount${startedText.isNotEmpty ? '　开始时间：$startedText' : ''}'),
+                            Text('已进行时长：$durText'),
+                            const Divider(color: Colors.white24),
+                            ...players.map((p) {
+                              final m = p as Map<String, dynamic>;
+                              final wl = (m['winLoss'] as num?)?.toInt() ?? 0;
+                              final remain = ((m['chips'] as num?)?.toInt() ?? 0) + ((m['cashedOut'] as num?)?.toInt() ?? 0);
+                              return ListTile(
+                                title: Text(m['name']?.toString() ?? '玩家'),
+                                subtitle: Text('总买入 ${m['totalBuyIn']} · 剩余 ${remain}'),
+                                trailing: Text('净输赢 ${wl >= 0 ? '+' : ''}$wl',
+                                    style: TextStyle(color: wl >= 0 ? Colors.green : Colors.red, fontWeight: FontWeight.bold)),
+                              );
+                            }).toList(),
+                          ],
+                        ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  final pw = await _verifyAdminPassword();
+                  if (pw != null && mounted) {
+                    _c.adminResetStats(roomId, pw);
+                    Navigator.of(ctx).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('重置请求已发送，战绩将清零归档')),
+                    );
+                  }
+                },
+                child: const Text('重置', style: TextStyle(color: Colors.orange)),
+              ),
+              TextButton(
+                onPressed: () {
+                  _c.roomReport = null;
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -529,6 +611,11 @@ class _LobbyPageState extends State<LobbyPage> {
                           child: const Text('设置'),
                         ),
                         const SizedBox(width: 4),
+                        TextButton(
+                          onPressed: () => _showRoomStatsDialog(room),
+                          child: const Text('战绩'),
+                        ),
+                        const SizedBox(width: 4),
                         if (isInThisRoom)
                           ElevatedButton(
                             onPressed: _enterTable,
@@ -592,6 +679,7 @@ class _RoomFormSeed {
   final int extensionCount;
   final int extensionSeconds;
   final int aiCount;
+  final List<String> aiNames;
   const _RoomFormSeed({
     this.name = '',
     this.sb = 10,
@@ -604,6 +692,7 @@ class _RoomFormSeed {
     this.extensionCount = 2,
     this.extensionSeconds = 60,
     this.aiCount = 0,
+    this.aiNames = const [],
   });
 }
 
@@ -620,6 +709,7 @@ class _RoomFormResult {
   final int extensionCount;
   final int extensionSeconds;
   final int aiCount;
+  final List<String> aiNames;
   const _RoomFormResult({
     required this.name,
     required this.sb,
@@ -633,6 +723,7 @@ class _RoomFormResult {
     required this.extensionCount,
     required this.extensionSeconds,
     required this.aiCount,
+    required this.aiNames,
   });
 }
 
@@ -667,7 +758,8 @@ class _RoomFormState extends State<_RoomForm> {
   late final TextEditingController _ecCtrl;
   late final TextEditingController _esCtrl;
   late bool _hasAnte;
-  late int _aiCount;
+  late int _aiCount; // 0..8 或 -1 表示自定义
+  late final Set<String> _aiNames;
 
   @override
   void initState() {
@@ -685,6 +777,7 @@ class _RoomFormState extends State<_RoomForm> {
     _esCtrl = TextEditingController(text: '${s.extensionSeconds}');
     _hasAnte = s.ante > 0;
     _aiCount = s.aiCount;
+    _aiNames = Set<String>.from(s.aiNames);
   }
 
   @override
@@ -718,6 +811,8 @@ class _RoomFormState extends State<_RoomForm> {
   void _submit() {
     final sb = _i(_sbCtrl, 10);
     final bb = _i(_bbCtrl, sb * 2);
+    final isCustom = _aiCount == -1;
+    final chosenNames = isCustom ? _aiNames.toList() : <String>[];
     widget.onSubmit(_RoomFormResult(
       name: _nameCtrl.text.trim(),
       sb: sb,
@@ -730,7 +825,8 @@ class _RoomFormState extends State<_RoomForm> {
       actionTimeout: _i(_toCtrl, 60),
       extensionCount: _i(_ecCtrl, 2),
       extensionSeconds: _i(_esCtrl, 60),
-      aiCount: _aiCount,
+      aiCount: isCustom ? chosenNames.length : _aiCount,
+      aiNames: chosenNames,
     ));
   }
 
@@ -783,17 +879,58 @@ class _RoomFormState extends State<_RoomForm> {
           _numField('每次延长时间(秒)', _esCtrl),
         ]),
         const SizedBox(height: 12),
-        const Text('AI 对手数量（单人测试发牌打牌流程用）', style: TextStyle(fontWeight: FontWeight.bold)),
+        const Text('AI 对手选择（单人测试发牌打牌流程用）', style: TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         DropdownButton<int>(
           value: _aiCount,
           isExpanded: true,
-          items: List.generate(9, (i) => DropdownMenuItem(
-            value: i,
-            child: Text(i == 0 ? '无（真人局）' : '$i 个 AI 牌手'),
-          )),
+          items: [
+            const DropdownMenuItem(value: 0, child: Text('无（真人局）')),
+            ...List.generate(8, (i) => DropdownMenuItem(
+              value: i + 1,
+              child: Text('随机挑选 ${i + 1} 个 AI 牌手'),
+            )),
+            const DropdownMenuItem(value: -1, child: Text('自定义选择…')),
+          ],
           onChanged: (v) => setState(() => _aiCount = v ?? 0),
         ),
+        if (_aiCount == -1) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.blueGrey.shade800,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('已选 ${_aiNames.length}/8 个 AI 牌手', style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: kAiNames.map((name) {
+                    final selected = _aiNames.contains(name);
+                    return FilterChip(
+                      label: Text(name, style: const TextStyle(fontSize: 12)),
+                      selected: selected,
+                      onSelected: (sel) => setState(() {
+                        if (sel) {
+                          if (_aiNames.length < 8) _aiNames.add(name);
+                        } else {
+                          _aiNames.remove(name);
+                        }
+                      }),
+                      selectedColor: Colors.amber.shade700,
+                      checkmarkColor: Colors.white,
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+        ],
         if (widget.showAiNote)
           Padding(
             padding: const EdgeInsets.only(top: 8),

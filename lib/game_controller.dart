@@ -57,6 +57,7 @@ class GameController extends ChangeNotifier {
   int delayClicks = 0; // 已使用的延时次数（最多 2）
   int secondsLeft = 0; // 当前窗口剩余秒数（用于倒计时显示，本地平滑递减）
   Map<String, dynamic>? dailyReport; // 最后一人离开时服务端下发的日报
+  Map<String, dynamic>? roomReport; // 大厅“战绩”请求返回的房间战绩
 
   Timer? _tickTimer, _expireTimer, _warnTimer;
   Timer? _retryTimer;
@@ -188,6 +189,14 @@ class GameController extends ChangeNotifier {
       case 'dailyReport':
         dailyReport = msg;
         break;
+      case 'roomReport':
+        // 大厅“战绩”按钮返回的整房间战绩（不进入房间也可查看）
+        roomReport = msg;
+        break;
+      case 'resetStatsOk':
+        // 战绩重置成功，清空本地战绩缓存以便下次重新获取
+        roomReport = null;
+        break;
       case 'playerSummary':
         // 离场时服务端给本人发的个人战绩，结构与 dailyReport 一致，复用同一弹窗
         dailyReport = msg;
@@ -247,6 +256,7 @@ class GameController extends ChangeNotifier {
     int maxBuyIn = 3999,
     int buyInUnit = 1000,
     int aiCount = 0,
+    List<String>? aiNames,
     int actionTimeout = 60,
     int extensionCount = 2,
     int extensionSeconds = 60,
@@ -264,6 +274,7 @@ class GameController extends ChangeNotifier {
       'maxBuyIn': maxBuyIn,
       'buyInUnit': buyInUnit,
       'aiCount': aiCount,
+      'aiNames': aiNames ?? [],
       'actionTimeout': actionTimeout,
       'extensionCount': extensionCount,
       'extensionSeconds': extensionSeconds,
@@ -326,6 +337,14 @@ class GameController extends ChangeNotifier {
   /// 管理员（知道管理密码）修改任意房间参数
   void adminUpdateRoom(Map<String, dynamic> params) =>
       _send({'type': 'adminUpdateRoom', ...params});
+
+  void requestRoomReport(String roomId) {
+    roomReport = null;
+    _send({'type': 'roomReport', 'roomId': roomId.toUpperCase()});
+  }
+
+  void adminResetStats(String roomId, String password) =>
+      _send({'type': 'adminResetStats', 'roomId': roomId.toUpperCase(), 'password': password});
 
   void clearError() {
     errorMsg = null;
